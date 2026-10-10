@@ -44,6 +44,14 @@ The intended experience is not a robot reading translated text aloud.
 
 It should feel closer to listening to two knowledgeable people discuss the material carefully and naturally in the listener's own language.
 
+### Source-grounded, not source-narrated
+
+The conversation should faithfully reflect the imported source while normally discussing the subject matter directly. The default experience is not a book review, reading guide, or narration of source structure.
+
+Avoid unnecessary framing such as “the book says…”, “in this chapter…”, “the author now explains…”, or “the chapter concludes…”. Prefer natural topic-level discussion and transitions.
+
+Explicit attribution to an author, book, study, or source is appropriate when it materially affects meaning, for example to distinguish an author's claim, a study result, or a contested proposition from general explanation.
+
 ## Native-language learning
 
 A central Bookcast value proposition is enabling users to learn from source material that is written in another language.
@@ -71,18 +79,24 @@ Technical terminology should remain in English when that is the established or m
 For example, terms such as:
 
 - pull request
-- dependency graph
-- bounded context
+- token
 - prompt
-- context window
-- model
 - API
+- code review
 
 may remain in English when translating them would make the explanation less natural or less precise.
 
 The goal is not linguistic purity.
 
 The goal is comprehension.
+
+### Natural Finnish terminology
+
+The target is natural spoken professional Finnish, not literal translation or workplace Finglish. Use established Finnish terminology for ordinary technical concepts when a natural expression exists. Permissions, compute resources, input validation, environment separation, and change risk should normally be expressed naturally in Finnish.
+
+Keep genuinely established domain-specific English terms where Finnish professionals naturally use them. For an important specialized English term without a good established Finnish equivalent, introduce it once with a Finnish explanation and then use consistent natural terminology.
+
+Avoid unnecessary English clauses, awkward English/Finnish hybrids, redundant English term plus Finnish duplicate constructions, and mechanical preservation of English merely because the source is English. A precomputed glossary is not required.
 
 ## Why conversational transformation matters
 
@@ -165,6 +179,19 @@ This is intentional.
 
 Bookcast should not require automatic chapter detection in order to deliver its core value.
 
+### Chapter-first workflow
+
+A Chapter must be independently importable, generatable, and listenable. A normal workflow is:
+
+1. Import one chapter.
+2. Generate its podcast.
+3. Listen to it.
+4. Import another chapter later.
+
+Do not assume the whole Book is available at generation time. This supports ordinary incremental usage and sources that are themselves published incrementally.
+
+Whole-book import and whole-book context may be supported later as optional enrichment. Neither is a prerequisite for generating an individual Chapter.
+
 ## Source-format independence
 
 The product domain should not depend on how source material was acquired.
@@ -246,6 +273,12 @@ The initial format uses two distinct roles, conceptually similar to:
 
 - a host who guides the discussion, asks questions, and connects ideas
 - a knowledgeable second speaker who explains, qualifies, and expands the material
+
+The intended format is expert-led. EXPERT may naturally do most of the talking, including longer stretches of straightforward explanation.
+
+HOST acts as the listener's intelligent guide: opening or redirecting a topic, asking useful follow-up questions, challenging an assumption, requesting clarification or a source-grounded example for difficult material, surfacing a trade-off, and occasionally summarizing or connecting ideas. Intervene when it improves understanding, rather than merely creating more dialogue turns.
+
+Do not require constant back-and-forth or an equal speaker split. Speaker word share is a diagnostic, not a product target; a relatively small HOST share can be entirely appropriate.
 
 Exact personas are a presentation concern and may evolve.
 

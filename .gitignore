@@ -29,4 +29,10 @@ target/
 .mvn/
 mvnw
 mvnw.cmd
+# Product slice local artifacts
+**/node_modules/
+frontend/.next/
+backend/data/
+/data/
+frontend/*.tsbuildinfo
 /spikes/

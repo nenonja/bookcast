@@ -37,13 +37,16 @@ Do not rely on previous ChatGPT, Claude, Codex or other agent conversations as d
 - Preserve source structure, examples, arguments, qualifications and trade-offs where practical.
 - Long-form generation must be decomposable into smaller source-grounded units.
 - Podcast output supports distinct speakers.
+- Chapters must be independently generatable; whole-book context is optional.
+- Generated dialogue is source-grounded but normally discusses the topic rather than narrating the book.
+- The podcast is expert-led; do not optimize for equal speaker participation.
 - Mobile listening is a primary use case.
 - Playback must eventually support seeking, resume, playback speed and chapter navigation.
 - Finnish is the default output language and a primary product experience.
 - Source language and output language are separate concepts.
 - A primary use case is transforming English long-form material into natural Finnish conversational learning content.
 - Do not implement generation as literal translation followed by text-to-speech.
-- Prefer natural spoken Finnish while preserving established English technical terminology when appropriate.
+- Prefer natural spoken professional Finnish; avoid unnecessary Finglish and preserve English technical terms only where natural in Finnish usage.
 - Supporting Finnish by default must not hard-code the architecture to Finnish-only use.
 
 Refer to `docs/PRODUCT_VISION.md` for the complete product intent and non-goals.

@@ -76,6 +76,8 @@ A Chapter represents an ordered learning unit within a Book.
 
 Chapter structure may initially be entered manually.
 
+A Chapter may be imported and generated independently. Whole-book availability is not assumed; other Chapters may be imported later.
+
 ### SourceRevision
 
 A SourceRevision is an immutable imported version of the source material for a Chapter.

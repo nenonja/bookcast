@@ -146,7 +146,7 @@ Prefer the smallest end-to-end slice that validates a product assumption.
 
 For Bookcast, an early slice is:
 
-`PDF -> chapter -> structured two-speaker script -> UI`
+`pasted text or .txt -> chapter -> structured two-speaker script -> UI`
 
 Add infrastructure when a demonstrated requirement justifies it.
 

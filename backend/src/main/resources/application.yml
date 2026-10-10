@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5442/bookcast}
+    username: ${DATABASE_USER:bookcast}
+    password: ${DATABASE_PASSWORD:bookcast}
+  jackson:
+    default-property-inclusion: non_null
+  mvc:
+    log-request-details: false
+server:
+  error:
+    include-message: never
+bookcast:
+  ai-mode: ${BOOKCAST_AI_MODE:openai}
+  api-key: ${OPENAI_API_KEY:}
+  data-dir: ${BOOKCAST_DATA_DIR:./data}
+  dialogue-model: ${BOOKCAST_DIALOGUE_MODEL:gpt-5.4}
+  audio-model: ${BOOKCAST_AUDIO_MODEL:gpt-realtime-2.1-mini}
+  source-unit-words: 800
+  encoding-timeout-seconds: ${BOOKCAST_ENCODING_TIMEOUT_SECONDS:1800}
+  worker-enabled: true

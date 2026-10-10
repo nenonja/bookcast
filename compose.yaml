@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: bookcast
+      POSTGRES_USER: bookcast
+      POSTGRES_PASSWORD: bookcast
+    ports: ["127.0.0.1:${BOOKCAST_DB_PORT:-5442}:5432"]
+    volumes: ["bookcast-db:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookcast"]
+      interval: 3s
+      retries: 20
+volumes:
+  bookcast-db:

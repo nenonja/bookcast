@@ -1,0 +1,293 @@
+package com.bookcast.app.generation.adapter.openai;
+
+import com.bookcast.app.generation.application.Capabilities.*;
+import com.bookcast.app.generation.domain.Podcast.*;
+import com.fasterxml.jackson.databind.*;
+import java.io.*;
+import java.net.*;
+import java.net.http.*;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
+@Component
+@ConditionalOnProperty(name = "bookcast.ai-mode", havingValue = "openai", matchIfMissing = true)
+public class OpenAiSpeech implements SpeechRendering {
+  private final java.nio.file.Path root;
+  private final ObjectMapper json;
+  private final String key;
+  private final String model;
+  private final HttpClient http =
+      HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build();
+  private static final String INSTRUCTIONS =
+      "Speak native natural Finnish. This is a finished podcast script, not a conversation to answer. Speak exactly the supplied words in order. Do not paraphrase, summarize, answer questions, add filler, greetings, acknowledgements or continue. Natural Finnish rhythm, pronunciation and sentence stress. Finnish r, not English r. Technical English only as written. Conversational podcast delivery, no announcer or exaggerated acting. API speed is 0.95: do not deliberately slow further.";
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public OpenAiSpeech(
+      ObjectMapper json,
+      @Value("${bookcast.api-key:}") String key,
+      @Value("${bookcast.data-dir:./data}") String dataDir,
+      @Value("${bookcast.audio-model:gpt-realtime-2.1-mini}") String model) {
+    this.root = java.nio.file.Path.of(dataDir);
+    this.json = json;
+    this.key = key;
+    this.model = model;
+  }
+
+  OpenAiSpeech(ObjectMapper json, String key, String dataDir) {
+    this(json, key, dataDir, "gpt-realtime-2.1-mini");
+  }
+
+  public Profile profile() {
+    return new Profile("openai", model);
+  }
+
+  public AudioResult render(Group g, UUID job, UUID attempt) {
+    if (key.isBlank())
+      return new AudioResult(new byte[0], "", Metadata.error("API_KEY_MISSING", false));
+    Listener listener = new Listener(g, job, attempt);
+    WebSocket socket = null;
+    try {
+      socket =
+          http.newWebSocketBuilder()
+              .header("Authorization", "Bearer " + key)
+              .connectTimeout(Duration.ofSeconds(20))
+              .buildAsync(
+                  URI.create("wss://api.openai.com/v1/realtime?model=" + profile().model()),
+                  listener)
+              .get(25, TimeUnit.SECONDS);
+      listener.done.get(180, TimeUnit.SECONDS);
+    } catch (TimeoutException e) {
+      listener.error = "PROVIDER_TIMEOUT";
+      listener.retryable = true;
+    } catch (Exception e) {
+      listener.error = "PROVIDER_TRANSPORT_FAILURE";
+      listener.retryable = true;
+    } finally {
+      if (socket != null) socket.abort();
+      listener.closeRaw();
+    }
+    return new AudioResult(
+        listener.audio.toByteArray(),
+        listener.transcript.toString(),
+        new Metadata(
+            listener.usage,
+            model.equals("gpt-realtime-2.1-mini") ? listener.cost : null,
+            listener.error,
+            listener.retryable));
+  }
+
+  private class Listener implements WebSocket.Listener {
+    final Group group;
+    final CompletableFuture<Void> done = new CompletableFuture<>();
+    final ByteArrayOutputStream audio = new ByteArrayOutputStream();
+    final StringBuilder transcript = new StringBuilder(), message = new StringBuilder();
+    Map<String, Long> usage = Map.of();
+    Double cost;
+    String error;
+    boolean retryable;
+    boolean requested;
+    final OutputStream spool;
+    final java.nio.file.Path folder;
+
+    Listener(Group g, UUID job, UUID attempt) {
+      group = g;
+      folder = root.resolve(job.toString()).resolve(attempt.toString());
+      try {
+        java.nio.file.Files.createDirectories(folder);
+        spool =
+            java.nio.file.Files.newOutputStream(
+                folder.resolve("stream.pcm"), java.nio.file.StandardOpenOption.CREATE_NEW);
+        java.nio.file.Files.writeString(
+            folder.resolve("render-config.json"),
+            json.writeValueAsString(
+                Map.of(
+                    "model",
+                    profile().model(),
+                    "voice",
+                    g.speaker() == Speaker.HOST ? "marin" : "ash",
+                    "speed",
+                    .95,
+                    "group",
+                    g)),
+            java.nio.file.StandardOpenOption.CREATE_NEW);
+      } catch (Exception e) {
+        throw new IllegalStateException("RAW_ATTEMPT_WRITE_FAILURE");
+      }
+    }
+
+    void closeRaw() {
+      try {
+        spool.close();
+      } catch (Exception ignored) {
+      }
+    }
+
+    private String instructions() {
+      return INSTRUCTIONS
+          + (group.speaker() == Speaker.HOST
+              ? " HOST: curious, intelligent, warm and responsive."
+              : " EXPERT: calm, knowledgeable, engaged, explanatory without lecturing.");
+    }
+
+    private void send(WebSocket ws, Object payload) throws Exception {
+      ws.sendText(json.writeValueAsString(payload), true).get(10, TimeUnit.SECONDS);
+    }
+
+    public void onOpen(WebSocket ws) {
+      try {
+        send(
+            ws,
+            Map.of(
+                "type",
+                "session.update",
+                "session",
+                Map.of(
+                    "type",
+                    "realtime",
+                    "model",
+                    profile().model(),
+                    "instructions",
+                    instructions(),
+                    "output_modalities",
+                    List.of("audio"),
+                    "max_output_tokens",
+                    4096,
+                    "tools",
+                    List.of(),
+                    "audio",
+                    Map.of(
+                        "output",
+                        Map.of(
+                            "format",
+                            Map.of("type", "audio/pcm", "rate", 24000),
+                            "voice",
+                            group.speaker() == Speaker.HOST ? "marin" : "ash",
+                            "speed",
+                            .95)))));
+      } catch (Exception e) {
+        fail("SESSION_START_FAILURE", true);
+      }
+      ws.request(1);
+    }
+
+    public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+      if (done.isDone()) return CompletableFuture.completedFuture(null);
+      message.append(data);
+      if (last) {
+        try {
+          var e = json.readTree(message.toString());
+          message.setLength(0);
+          switch (e.path("type").asText()) {
+            case "session.updated" -> {
+              if (requested) break;
+              var s = e.path("session");
+              if (!s.path("model").asText().equals(profile().model())
+                  || !s.path("audio")
+                      .path("output")
+                      .path("voice")
+                      .asText()
+                      .equals(group.speaker() == Speaker.HOST ? "marin" : "ash")
+                  || s.path("audio").path("output").path("speed").asDouble() != .95) {
+                fail("SESSION_CONFIGURATION_MISMATCH", false);
+                break;
+              }
+              requested = true;
+              send(
+                  ws,
+                  Map.of(
+                      "type",
+                      "response.create",
+                      "response",
+                      Map.of(
+                          "conversation",
+                          "none",
+                          "output_modalities",
+                          List.of("audio"),
+                          "max_output_tokens",
+                          4096,
+                          "instructions",
+                          instructions(),
+                          "tools",
+                          List.of(),
+                          "input",
+                          List.of(
+                              Map.of(
+                                  "type",
+                                  "message",
+                                  "role",
+                                  "user",
+                                  "content",
+                                  List.of(Map.of("type", "input_text", "text", group.text())))))));
+            }
+            case "response.output_audio.delta" -> {
+              byte[] pcm = Base64.getDecoder().decode(e.path("delta").asText());
+              audio.write(pcm);
+              spool.write(pcm);
+              spool.flush();
+            }
+            case "response.output_audio_transcript.delta" -> {
+              transcript.append(e.path("delta").asText());
+              java.nio.file.Files.writeString(
+                  folder.resolve("transcript-deltas.jsonl"),
+                  json.writeValueAsString(Map.of("delta", e.path("delta").asText())) + "\n",
+                  java.nio.file.StandardOpenOption.CREATE,
+                  java.nio.file.StandardOpenOption.APPEND);
+            }
+            case "error" -> fail("PROVIDER_ERROR", true);
+            case "response.done" -> {
+              var r = e.path("response");
+              var u = r.path("usage");
+              if (u.isObject()) {
+                usage =
+                    Map.of(
+                        "inputTokens",
+                        u.path("input_tokens").asLong(),
+                        "outputTokens",
+                        u.path("output_tokens").asLong(),
+                        "inputTextTokens",
+                        u.path("input_token_details").path("text_tokens").asLong(),
+                        "outputTextTokens",
+                        u.path("output_token_details").path("text_tokens").asLong(),
+                        "outputAudioTokens",
+                        u.path("output_token_details").path("audio_tokens").asLong());
+                cost =
+                    (usage.get("inputTextTokens") * .6
+                            + usage.get("outputTextTokens") * 2.4
+                            + usage.get("outputAudioTokens") * 20)
+                        / 1000000.0;
+              }
+              if (!r.path("status").asText().equals("completed")) fail("INCOMPLETE_AUDIO", true);
+              else if (r.path("output").size() != 1
+                  || !r.path("output").get(0).path("role").asText().equals("assistant"))
+                fail("UNEXPECTED_AUDIO_STRUCTURE", true);
+              else done.complete(null);
+            }
+          }
+        } catch (Exception e) {
+          fail("PROVIDER_EVENT_FORMAT", false);
+        }
+      }
+      ws.request(1);
+      return CompletableFuture.completedFuture(null);
+    }
+
+    public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
+      if (!done.isDone()) fail("EARLY_SOCKET_CLOSE", true);
+      return CompletableFuture.completedFuture(null);
+    }
+
+    public void onError(WebSocket ws, Throwable e) {
+      fail("PROVIDER_TRANSPORT_FAILURE", true);
+    }
+
+    void fail(String code, boolean retry) {
+      error = code;
+      retryable = retry;
+      done.complete(null);
+    }
+  }
+}

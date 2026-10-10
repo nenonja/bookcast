@@ -2,7 +2,9 @@
 
 ## Status
 
-This document describes the intended current architecture of Bookcast.
+This document describes the current architecture of Bookcast.
+
+The first product slice now imports pasted chapter text, persists immutable source revisions, generates source-linked Finnish dialogue, renders Realtime Mini audio and exposes polling plus browser playback. GPT-Live remains experimental and is not the v1 renderer.
 
 It is a living system map.
 
@@ -27,7 +29,7 @@ Bookcast begins as a single-user web application backed by a modular Spring appl
 │        Next.js web app        │
 │                               │
 │ source / generation / script  │
-│ later: player / study         │
+│ player / later: study         │
 └──────────────┬────────────────┘
                │
                │ OpenAPI HTTP API
@@ -86,7 +88,7 @@ bookcast/
 └── infra/
 ```
 
-Do not create tooling directories before they are needed.
+The first implementation adds `api/` for the OpenAPI source of truth and `compose.yaml` for local PostgreSQL. Do not create tooling directories before they are needed.
 
 The repository itself should remain the durable source of context for both human and AI contributors.
 
@@ -100,7 +102,7 @@ The architectural direction is:
 
 > DDD-oriented modular monolith with explicit module boundaries and ports/adapters around external capabilities.
 
-Initially only modules with real behavior should exist.
+Only modules with real behavior exist.
 
 Therefore the first implementation should contain:
 
@@ -202,7 +204,7 @@ ChapterSource
 └── ordered source blocks
 ```
 
-The exact Java types are implementation details to be established during the first slice.
+The public `library.Library` API returns immutable `ChapterSource` snapshots; ordered blocks include their stable UUIDs and inspectable exclusion reasons.
 
 ---
 
@@ -236,6 +238,14 @@ pasted plain text
 Initial workflow may treat one import as one chapter.
 
 This deliberately avoids automatic chapter detection.
+
+## Source normalization and acquisition noise
+
+The Finnish dialogue spike demonstrated that imported text may include acquisition, UI, or navigation material that should not automatically become podcast content. Source normalization owns the distinction between meaningful imported learning content and obvious acquisition debris before generation.
+
+Keep classification decisions inspectable and auditable, including which blocks are excluded and why. Preserve source provenance rather than silently changing source behind generated artifacts.
+
+The spike establishes this concern, not a finalized classification algorithm or type hierarchy. Do not introduce a large rich SourceBlock taxonomy for it now.
 
 ## Future importers
 
@@ -275,11 +285,17 @@ Do not invent missing figures, tables, diagrams, or other source material that w
 
 Its initial responsibility is deliberately narrow:
 
-> produce a source-linked conversational script for a Chapter source revision.
+> produce a source-linked conversational script and playable audio for a Chapter source revision.
 
 Learning artifacts such as quizzes are deferred.
 
-Speech generation is deferred until the script workflow is proven.
+Speech rendering is now part of the first usable slice, after structurally validated dialogue.
+
+## Chapter independence
+
+Generation must work from the current Chapter/SourceRevision plus generally available product requirements. It must not require all Chapters of the Book, whole-book preprocessing, or a precomputed Book glossary.
+
+Future Book-level context may optionally improve consistency between Chapters, for example through terminology choices or accumulated context. It is enrichment, not a generation prerequisite. Do not design or implement Book-level terminology persistence yet.
 
 ## Generation vocabulary
 
@@ -460,16 +476,16 @@ Output-language instructions may include terminology policy.
 
 For the initial Finnish experience:
 
-- use natural Finnish prose,
+- use natural spoken professional Finnish and established Finnish expressions for ordinary technical concepts,
 - preserve established English technical terminology where appropriate,
 - do not mechanically translate established software and engineering terms,
 - explain terminology conversationally where doing so improves learning.
 
-Terminology handling belongs to Bookcast generation requirements rather than to a specific model provider.
+Terminology handling belongs to Bookcast generation requirements rather than to a specific model provider. Follow the natural Finnish terminology policy in `docs/PRODUCT_VISION.md`; English source language does not justify unnecessary code-switching. This policy does not require a precomputed glossary.
 
 ## Speech language
 
-Later speech synthesis must receive explicit language/locale information where supported.
+Speech rendering receives explicit Finnish delivery guidance in the current adapter; additional languages/locales can follow behind the same capability boundary.
 
 The chosen speech provider and voice must be evaluated for natural Finnish pronunciation and conversational listening quality.
 
@@ -507,6 +523,20 @@ The spike is allowed to use direct provider/Spring AI APIs.
 Its code may be discarded.
 
 Do not let spike implementation become accidental production architecture.
+
+## Established findings and experimental settings
+
+See `spikes/finnish-dialogue/SPIKE_RESULTS.md` for evidence and limitations. The v2 run showed local continuity across two neighboring transitions, not chapter-scale continuity. Later saved v3/v4 and GPT-5.4 generation experiments were executed. Their evidence and limitations are recorded in the corresponding spike reports; no spike setting becomes an architectural invariant. The GPT-Live conclusion is in `spikes/finnish-dialogue/LIVE_PRESENTATION_CONCLUSION.md`.
+
+The following remain experimental and must not become architectural constants:
+
+- approximately 800 source words per generation unit,
+- previous four dialogue turns as continuity context,
+- exact HOST/EXPERT proportions,
+- exact source-noise classification heuristics,
+- whether Book-level terminology memory or a glossary is useful.
+
+The expert-led product format and Finnish terminology requirements are defined in `docs/PRODUCT_VISION.md`; observed speaker proportions are diagnostics, not quality targets.
 
 ---
 
@@ -552,6 +582,20 @@ The concrete model should be validated during implementation.
 
 The application, not the provider SDK, owns the externally visible failure vocabulary.
 
+## Generation attempt observability
+
+Preserve safe execution metadata for every generation attempt, including failed attempts where possible:
+
+- attempt identity,
+- status/outcome,
+- elapsed time,
+- provider/model metadata,
+- available token usage,
+- safe provider/error classification,
+- retryability assessment.
+
+Provider-specific exceptions and response structures remain inside infrastructure adapters. Retryability is an assessment, not an instruction to retry automatically. Logging and privacy constraints in section 19 apply to all outcomes.
+
 ## Retry
 
 Retry should operate at the smallest useful persisted generation unit.
@@ -576,6 +620,8 @@ stable turn ordering
 valid source-block references
 references belong to the requested source revision
 ```
+
+Generated `coveredSourceBlockIds` are declarations of structural coverage, not proof of semantic fidelity. A structurally valid segment can still omit content or introduce unsupported explanations.
 
 These checks establish structural correctness.
 
@@ -659,7 +705,7 @@ Generated TypeScript client
 Next.js
 ```
 
-The exact source-of-truth direction must be decided explicitly before the API pipeline is implemented.
+The checked-in `api/openapi.json` is the contract source of truth. Maven generates Spring endpoint interfaces and API DTOs; `openapi-typescript` generates browser types consumed by `openapi-fetch`. Both boundaries are generated from the same specification. API DTOs are mapped at inbound adapters, not reused as persistence models.
 
 The API must not expose:
 
@@ -688,11 +734,10 @@ Generation status
 Generated script
 ```
 
-The first frontend does not require:
+The first frontend includes browser playback with seeking, ±15 seconds, speed and local resume position. It does not require:
 
 ```text
 PWA installation
-audio player
 offline mode
 authentication
 quiz UI
@@ -705,63 +750,30 @@ Those belong to later slices.
 
 # 16. First production vertical slice
 
-After the real-model spike, the first production slice is:
+Implemented flow:
 
 ```text
-Browser
-   │
-   │ Create book/chapter
-   │ Paste text or upload .txt
-   ▼
-Next.js
-   │
-   │ OpenAPI
-   ▼
-Spring Boot
-   │
-   ├── library
-   │     │
-   │     ├── Book
-   │     ├── Chapter
-   │     ├── SourceRevision
-   │     └── SourceBlock[]
-   │
-   └── generation
-          │
-          ├── read immutable ChapterSource
-          │
-          ├── create Generation
-          │
-          ├── create multiple ScriptSegments
-          │
-          └── FakeGenerationAdapter
-                     │
-                     ▼
-               DialogueTurn[]
-                     │
-                     ▼
-                 OpenAPI
-                     │
-                     ▼
-                Next.js UI
+Next.js pasted-text import
+  → library: Book / Chapter / immutable SourceRevision / ordered SourceBlocks
+  → generation: queued / running / succeeded / failed
+  → GPT-5.4 low: validated ScriptSegments / HOST and EXPERT DialogueTurns
+  → Realtime Mini: isolated audio groups, marin / ash, speed 0.95
+  → preserved PCM / transcript / attempt metadata + waveform validation
+  → one AAC-LC M4A
+  → browser player / localStorage resume position
 ```
 
-The fake generation adapter should:
+There are only two application modules. `generation` reads revision snapshots through the public `library` API; library never reads generation internals. PostgreSQL stores revisions, dialogue, accepted audio receipts, jobs and safe attempt metadata. Flyway installs the schema and database immutability triggers. Local filesystem storage holds private provider candidates, raw attempts and assembled audio; it must persist alongside the database. No object storage or distributed jobs are introduced.
 
-- return deterministic structured output
-- generate multiple segments
-- support deliberate failure on a selected segment
+The in-process worker runs sequentially in one backend instance. Atomic PostgreSQL claiming and a unique active-generation index prevent duplicate work. `requestId` makes Generate requests idempotent; reuse with a different source fails. Completed script segments and audio groups are checkpoints. An application restart marks running jobs/attempts interrupted and requires an explicit user retry; it never silently repeats an uncertain paid call. Retry preserves accepted artifacts and their hashes. Deploying multiple backend instances is not supported by this initial recovery policy.
 
-This lets the application test:
+The dialogue adapter uses the established v4-style Finnish guidance, roughly 800-word units and the previous four turns. These are initial execution settings, not domain constants or proof of chapter-scale fidelity. Chapter and source revision identities are fixed for a generation. Source block IDs declare coverage, not semantic correctness. No expensive semantic verifier runs in this slice.
 
-- orchestration
-- progress
-- failure
-- retry
-- module boundaries
-- source provenance
+The audio adapter uses isolated Realtime contexts and bounded contiguous same-speaker groups. Turn slices retain exact text and ordering, including long turns split for transport. Transcript lexical differences are retained diagnostically, never automatically rerendered. Deterministic PCM validation rejects missing activity, long leading/trailing silence, internal stalls and implausible speech rates. Raw attempts remain unchanged. Assembly inserts only 200/350 ms pauses and performs one AAC-LC encode plus a complete decode check. Live-specific soft wrapping, orphan salvage and completion heuristics remain in the spike.
 
-without depending on external model behavior.
+Safe attempt metadata includes capability/unit identity, provider/model, outcome, elapsed time, available usage, estimated USD cost, retryability and bounded error classification. Missing usage is shown as incomplete cost information, not zero measured spend. API credentials, source contents, prompts and raw response bodies are never logged. Source and transcript payloads are available only through the user-facing API and private artifact storage.
+
+`BOOKCAST_AI_MODE=fake` provides deterministic no-network dialogue and test-tone audio for local development and tests. Normal tests use this mode, PostgreSQL Testcontainers and real migrations/encoding. Real provider adapters additionally have offline protocol fixtures. Selecting real adapters alone does not make paid calls; only an explicit Generate/retry action queues provider work.
 
 ---
 
@@ -862,7 +874,7 @@ Model-as-judge evaluation is useful evidence, not absolute truth.
 
 Imported source material may be copyrighted or otherwise private.
 
-Application logs must not contain full source text or full provider prompts by default.
+Application logs must not contain full source text, full provider prompts, API credentials, or sensitive raw provider response bodies by default.
 
 Log identifiers and metadata rather than source payloads.
 
@@ -912,8 +924,8 @@ EPUB ingestion
 automatic chapter detection
 object-storage provider
 distributed workflow engine
-speech provider
-voice selection
+additional speech providers
+alternative voice selection
 learning module
 listening module
 provider routing
