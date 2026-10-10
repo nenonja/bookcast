@@ -72,6 +72,22 @@ public class GenerationService {
     return artifacts.absolutePath(j.audioPath());
   }
 
+  public record DownloadAudio(String path, String bookTitle, String chapterTitle) {}
+
+  public DownloadAudio downloadAudio(UUID id) {
+    var job = store.get(id);
+    String path;
+    try {
+      path = audioPath(id);
+    } catch (NoSuchElementException e) {
+      throw new AudioArtifactUnavailable();
+    }
+    var source = library.revision(job.chapterId(), job.sourceRevisionId());
+    return new DownloadAudio(path, source.bookTitle(), source.title());
+  }
+
+  public static class AudioArtifactUnavailable extends RuntimeException {}
+
   public void interrupted() {
     store.interrupted();
   }

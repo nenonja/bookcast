@@ -78,6 +78,8 @@ The `library` and `generation` modules are checked by Spring Modulith and ArchUn
 
 Generation is queued and polled. Accepted segments/groups persist; a failed job can be retried explicitly from the first missing unit. A restart marks in-flight work failed rather than automatically spending again. The v1 worker supports one backend process. Provider failures require explicit user retry; completed checkpoints are reused. Usage and estimated costs remain explicitly incomplete when the provider does not report usage.
 
+Completed chapter audio can be downloaded as M4A for copying to a phone or another device. This is the intended local-development workflow before Bookcast is hosted remotely.
+
 The player supports play/pause, native seeking, ±15 seconds, speed and resume per generation in localStorage. Audio endpoints support byte ranges. The browser discloses AI-generated voices.
 
 ## Intentional limits

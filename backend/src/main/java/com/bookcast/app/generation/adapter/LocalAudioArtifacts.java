@@ -19,8 +19,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
   public LocalAudioArtifacts(
       @Value("${bookcast.data-dir:./data}") String root,
       @Value("${bookcast.encoding-timeout-seconds:1800}") long encodingTimeoutSeconds) {
-    if (encodingTimeoutSeconds <= 0)
-      throw new IllegalArgumentException("INVALID_ENCODING_TIMEOUT");
+    if (encodingTimeoutSeconds <= 0) throw new IllegalArgumentException("INVALID_ENCODING_TIMEOUT");
     this.root = Path.of(root).toAbsolutePath().normalize();
     this.encodingTimeoutSeconds = encodingTimeoutSeconds;
   }

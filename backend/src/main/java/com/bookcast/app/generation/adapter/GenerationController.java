@@ -5,6 +5,7 @@ import com.bookcast.app.generation.domain.Podcast.*;
 import com.bookcast.contract.api.GenerationApi;
 import com.bookcast.contract.model.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import org.springframework.core.io.*;
 import org.springframework.http.*;
@@ -55,6 +56,10 @@ public class GenerationController implements GenerationApi {
         .retryable(j.retryable())
         .audioUrl(
             j.status() == Status.succeeded ? "/api/v1/generations/" + j.id() + "/audio" : null)
+        .audioDownloadUrl(
+            j.status() == Status.succeeded && j.audioPath() != null
+                ? "/api/v1/generations/" + j.id() + "/audio/download"
+                : null)
         .scriptSegments(
             segments.stream().map(s -> json.convertValue(s, ScriptSegmentDto.class)).toList())
         .attempts(attempts.stream().map(a -> json.convertValue(a, AttemptDto.class)).toList());
@@ -82,5 +87,40 @@ public class GenerationController implements GenerationApi {
         .contentType(MediaType.parseMediaType("audio/mp4"))
         .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
         .body(new FileSystemResource(service.audioPath(id)));
+  }
+
+  public ResponseEntity<Resource> downloadAudio(UUID id) {
+    var audio = service.downloadAudio(id);
+    String chapter = safeTitle(audio.chapterTitle());
+    if (chapter.isBlank()) chapter = "Chapter";
+    String book = safeTitle(audio.bookTitle());
+    String filename = (book.isBlank() ? chapter : book + " - " + chapter) + ".m4a";
+    return ResponseEntity.ok()
+        .contentType(MediaType.parseMediaType("audio/mp4"))
+        .header(
+            HttpHeaders.CONTENT_DISPOSITION,
+            ContentDisposition.attachment()
+                .filename(filename, StandardCharsets.UTF_8)
+                .build()
+                .toString())
+        .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
+        .body(new FileSystemResource(audio.path()));
+  }
+
+  private static String safeTitle(String title) {
+    if (title == null) return "";
+    var safe = new StringBuilder();
+    title
+        .codePoints()
+        .forEach(
+            c -> {
+              if (Character.isISOControl(c)
+                  || Character.getType(c) == Character.FORMAT
+                  || c == 34
+                  || c == 92
+                  || "/:*?<>|".indexOf(c) >= 0) safe.append('_');
+              else safe.appendCodePoint(c);
+            });
+    return safe.toString().strip();
   }
 }

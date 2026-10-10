@@ -147,6 +147,22 @@ class ProductFlowTest {
     mvc.perform(get("/api/v1/generations/" + job.id() + "/audio").header("Range", "bytes=0-99"))
         .andExpect(status().isPartialContent())
         .andExpect(header().string("Content-Type", "audio/mp4"));
+    byte[] finalBytes = Files.readAllBytes(Path.of(service.audioPath(job.id())));
+    int callsBeforeDownload = speech.calls;
+    var attemptsBeforeDownload = service.attempts(job.id());
+    var downloaded =
+        mvc.perform(get("/api/v1/generations/" + job.id() + "/audio/download"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("Content-Type", "audio/mp4"))
+            .andExpect(content().bytes(finalBytes))
+            .andReturn();
+    var disposition =
+        org.springframework.http.ContentDisposition.parse(
+            downloaded.getResponse().getHeader("Content-Disposition"));
+    assertEquals("attachment", disposition.getType());
+    assertTrue(disposition.getFilename().endsWith("Test chapter.m4a"));
+    assertEquals(callsBeforeDownload, speech.calls);
+    assertEquals(attemptsBeforeDownload, service.attempts(job.id()));
     mvc.perform(
             post("/api/v1/chapters")
                 .contentType("application/json")
@@ -174,5 +190,45 @@ class ProductFlowTest {
     assertTrue(service.get(interrupted.id()).retryable());
     assertEquals("interrupted", service.attempts(interrupted.id()).getFirst().outcome());
     assertTrue(service.attempts(interrupted.id()).getFirst().retryable());
+  }
+
+  @Test
+  void downloadReadinessMissingArtifactsAndSafeFinnishFilename() throws Exception {
+    var chapter =
+        library.importChapter(
+            null,
+            "Älykäs kirja",
+            "Luku: käyttöoikeudet/ääni\r\n",
+            "A useful source paragraph.",
+            "en");
+    var job = service.start(chapter.id(), chapter.sourceRevisionId(), UUID.randomUUID());
+    String url = "/api/v1/generations/" + job.id() + "/audio/download";
+    mvc.perform(get(url)).andExpect(status().isConflict());
+    mvc.perform(get("/api/v1/generations/" + UUID.randomUUID() + "/audio/download"))
+        .andExpect(status().isNotFound());
+    Path file = data.resolve("download-fixture-" + job.id() + ".m4a");
+    byte[] bytes = {1, 2, 3, 4};
+    Files.write(file, bytes);
+    store.state(job.id(), "succeeded", "complete", null, false, data.relativize(file).toString());
+    int calls = speech.calls;
+    var result =
+        mvc.perform(get(url))
+            .andExpect(status().isOk())
+            .andExpect(content().bytes(bytes))
+            .andReturn();
+    String header = result.getResponse().getHeader("Content-Disposition");
+    assertTrue(header.contains("filename*=UTF-8''"));
+    assertEquals(
+        "Älykäs kirja - Luku_ käyttöoikeudet_ääni.m4a",
+        org.springframework.http.ContentDisposition.parse(header).getFilename());
+    assertEquals(calls, speech.calls);
+    assertTrue(service.attempts(job.id()).isEmpty());
+    Files.delete(file);
+    mvc.perform(get(url))
+        .andExpect(status().isInternalServerError())
+        .andExpect(jsonPath("$.code").value("INTERNAL_FAILURE"))
+        .andExpect(jsonPath("$.message").value("The operation failed."));
+    assertEquals(calls, speech.calls);
+    assertTrue(service.attempts(job.id()).isEmpty());
   }
 }
