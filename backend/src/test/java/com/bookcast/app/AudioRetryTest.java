@@ -253,6 +253,41 @@ class AudioRetryTest {
   }
 
   @Test
+  void retryableStructuralAnomalyThenSuccess() throws Exception {
+    var f = new Fixture();
+    f.results(Metadata.error("UNEXPECTED_AUDIO_STRUCTURE", true), success());
+    f.service.workOne();
+    f.calls(2);
+    assertEquals(Status.succeeded, f.job.status());
+    assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(Attempt::outcome).toList());
+    verify(f.store, times(1)).audio(any(), any());
+    verify(f.timing).pause(2000);
+  }
+
+  @Test
+  void threeStructuralAnomaliesStopAtLimit() throws Exception {
+    var f = new Fixture();
+    var anomaly = Metadata.error("UNEXPECTED_AUDIO_STRUCTURE", true);
+    f.results(anomaly, anomaly, anomaly);
+    f.service.workOne();
+    f.calls(3);
+    assertEquals(Status.failed, f.job.status());
+    assertEquals("UNEXPECTED_AUDIO_STRUCTURE", f.job.errorCode());
+    assertEquals(1, f.receipts.size());
+    verify(f.timing, times(2)).pause(anyLong());
+  }
+
+  @Test
+  void unsupportedProviderSchemaIsNotAutomaticallyRetried() throws Exception {
+    var f = new Fixture();
+    f.results(Metadata.error("PROVIDER_SCHEMA_UNSUPPORTED", false));
+    f.service.workOne();
+    f.calls(1);
+    assertEquals(Status.failed, f.job.status());
+    verify(f.timing, never()).pause(anyLong());
+  }
+
+  @Test
   void failedArtifactPersistenceStillRecordsProviderUsageWithoutRetry() throws Exception {
     var f = new Fixture();
     f.results(success());
@@ -283,7 +318,7 @@ class AudioRetryTest {
           AudioRetryPolicy.transientFailure(
               new Metadata(Map.of(), null, "PROVIDER_HTTP_" + status, true, status, null, null)));
     assertFalse(AudioRetryPolicy.transientFailure(Metadata.error("PROVIDER_QUOTA", false)));
-    assertFalse(
+    assertTrue(
         AudioRetryPolicy.transientFailure(Metadata.error("UNEXPECTED_AUDIO_STRUCTURE", true)));
   }
 }

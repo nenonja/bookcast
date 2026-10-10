@@ -39,6 +39,7 @@ public class AudioRetryPolicy {
     if (m.providerStatus() != null && !Set.of(429, 500, 502, 503, 504).contains(m.providerStatus()))
       return false;
     return Set.of(
+            "UNEXPECTED_AUDIO_STRUCTURE",
             "PROVIDER_TIMEOUT",
             "PROVIDER_TRANSPORT_FAILURE",
             "EARLY_SOCKET_CLOSE",

@@ -195,11 +195,11 @@ class ProviderProtocolTest {
               listener.onOpen(socket);
               String[] events = {
                 "{\"type\":\"session.updated\",\"session\":{\"model\":\"gpt-realtime-2.1-mini\",\"audio\":{\"output\":{\"voice\":\"ash\",\"speed\":0.95}}}}",
-                "{\"type\":\"response.output_audio.delta\",\"delta\":\"AQACAA==\"}",
-                "{\"type\":\"response.output_audio_transcript.delta\",\"delta\":\"Selitys.\"}",
-                "{\"type\":\"response.done\",\"response\":{\"status\":\""
+                "{\"type\":\"response.output_audio.delta\",\"response_id\":\"resp_1\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"AQACAA==\"}",
+                "{\"type\":\"response.output_audio_transcript.delta\",\"response_id\":\"resp_1\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"Selitys.\"}",
+                "{\"type\":\"response.done\",\"response\":{\"id\":\"resp_1\",\"status\":\""
                     + status
-                    + "\",\"output\":[{\"role\":\"assistant\"}],\"usage\":{\"input_tokens\":10,\"output_tokens\":20,\"input_token_details\":{\"text_tokens\":10},\"output_token_details\":{\"text_tokens\":2,\"audio_tokens\":18}}}}"
+                    + "\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_audio\"}]}],\"usage\":{\"input_tokens\":10,\"output_tokens\":20,\"input_token_details\":{\"text_tokens\":10},\"output_token_details\":{\"text_tokens\":2,\"audio_tokens\":18}}}}"
               };
               for (String e : events) listener.onText(socket, e, true);
               return CompletableFuture.completedFuture(socket);

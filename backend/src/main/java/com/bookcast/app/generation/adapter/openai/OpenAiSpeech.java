@@ -46,9 +46,12 @@ public class OpenAiSpeech implements SpeechRendering {
   }
 
   public AudioResult render(Group g, UUID job, UUID attempt) {
-    if (key.isBlank())
-      return new AudioResult(new byte[0], "", Metadata.error("API_KEY_MISSING", false));
     Listener listener = new Listener(g, job, attempt);
+    if (key.isBlank()) {
+      listener.fail("API_KEY_MISSING", false);
+      listener.closeRaw();
+      return new AudioResult(new byte[0], "", Metadata.error("API_KEY_MISSING", false));
+    }
     WebSocket socket = null;
     try {
       socket =
@@ -81,6 +84,7 @@ public class OpenAiSpeech implements SpeechRendering {
 
   private class Listener implements WebSocket.Listener {
     final Group group;
+    final RealtimeAudioStructure structure = new RealtimeAudioStructure();
     final CompletableFuture<Void> done = new CompletableFuture<>();
     final ByteArrayOutputStream audio = new ByteArrayOutputStream();
     final StringBuilder transcript = new StringBuilder(), message = new StringBuilder();
@@ -103,6 +107,7 @@ public class OpenAiSpeech implements SpeechRendering {
         spool =
             java.nio.file.Files.newOutputStream(
                 folder.resolve("stream.pcm"), java.nio.file.StandardOpenOption.CREATE_NEW);
+        java.nio.file.Files.createFile(folder.resolve("structure-events.jsonl"));
         java.nio.file.Files.writeString(
             folder.resolve("render-config.json"),
             json.writeValueAsString(
@@ -121,10 +126,21 @@ public class OpenAiSpeech implements SpeechRendering {
       }
     }
 
-    void closeRaw() {
+    synchronized void closeRaw() {
       try {
         spool.close();
       } catch (Exception ignored) {
+      }
+      try {
+        var diagnostics = structure.snapshot();
+        diagnostics.put("attemptErrorCode", error);
+        diagnostics.put("configurationValidated", requested);
+        java.nio.file.Files.writeString(
+            folder.resolve("response-structure.json"),
+            json.writeValueAsString(diagnostics),
+            java.nio.file.StandardOpenOption.CREATE_NEW);
+      } catch (Exception e) {
+        fail("STRUCTURE_DIAGNOSTIC_WRITE_FAILURE", false);
       }
     }
 
@@ -181,13 +197,17 @@ public class OpenAiSpeech implements SpeechRendering {
       ws.request(1);
     }
 
-    public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+    public synchronized CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
       if (done.isDone()) return CompletableFuture.completedFuture(null);
       message.append(data);
       if (last) {
         try {
           var e = json.readTree(message.toString());
           message.setLength(0);
+          java.nio.file.Files.writeString(
+              folder.resolve("structure-events.jsonl"),
+              json.writeValueAsString(structure.observe(e)) + "\n",
+              java.nio.file.StandardOpenOption.APPEND);
           switch (e.path("type").asText()) {
             case "session.updated" -> {
               if (requested) break;
@@ -277,10 +297,14 @@ public class OpenAiSpeech implements SpeechRendering {
                 if (r.path("status_details").path("error").isObject())
                   failure(OpenAiAudioFailures.event(r.path("status_details").path("error")));
                 else fail("INCOMPLETE_AUDIO", false);
-              } else if (r.path("output").size() != 1
-                  || !r.path("output").get(0).path("role").asText().equals("assistant"))
-                fail("UNEXPECTED_AUDIO_STRUCTURE", false);
-              else done.complete(null);
+              } else {
+                String structuralError = structure.validate();
+                if (structuralError != null)
+                  fail(
+                      structuralError,
+                      requested && structuralError.equals("UNEXPECTED_AUDIO_STRUCTURE"));
+                else done.complete(null);
+              }
             }
           }
         } catch (Exception e) {
@@ -297,8 +321,8 @@ public class OpenAiSpeech implements SpeechRendering {
       return CompletableFuture.completedFuture(null);
     }
 
-    public void onError(WebSocket ws, Throwable e) {
-      failure(OpenAiAudioFailures.exception(e));
+    public synchronized void onError(WebSocket ws, Throwable e) {
+      if (!done.isDone()) failure(OpenAiAudioFailures.exception(e));
     }
 
     void usageToken(Map<String, Long> values, String name, JsonNode value) {
@@ -306,14 +330,14 @@ public class OpenAiSpeech implements SpeechRendering {
         values.put(name, value.asLong());
     }
 
-    void failure(Metadata metadata) {
+    synchronized void failure(Metadata metadata) {
       providerStatus = metadata.providerStatus();
       providerCode = metadata.providerCode();
       retryAfterMs = metadata.retryAfterMs();
       fail(metadata.errorCode(), metadata.retryable());
     }
 
-    void fail(String code, boolean retry) {
+    synchronized void fail(String code, boolean retry) {
       error = code;
       retryable = retry;
       done.complete(null);
