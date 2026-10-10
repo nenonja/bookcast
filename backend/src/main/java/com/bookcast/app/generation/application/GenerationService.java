@@ -16,6 +16,7 @@ public class GenerationService {
   private final SpeechRendering speech;
   private final AudioArtifacts artifacts;
   private final int unitWords;
+  private final AudioRetryPolicy audioRetry;
 
   public GenerationService(
       Library library,
@@ -23,13 +24,15 @@ public class GenerationService {
       TextGeneration text,
       SpeechRendering speech,
       AudioArtifacts artifacts,
-      @Value("${bookcast.source-unit-words:800}") int unitWords) {
+      @Value("${bookcast.source-unit-words:800}") int unitWords,
+      AudioRetryPolicy audioRetry) {
     this.library = library;
     this.store = store;
     this.text = text;
     this.speech = speech;
     this.artifacts = artifacts;
     this.unitWords = unitWords;
+    this.audioRetry = audioRetry;
   }
 
   public Job start(UUID chapter, UUID revision, UUID request) {
@@ -131,7 +134,7 @@ public class GenerationService {
       throw new IllegalStateException("GENERATION_PROFILE_CHANGED");
     var source = library.revision(job.chapterId(), job.sourceRevisionId());
     var units = units(source);
-    store.totals(job.id(), units.size(), 0);
+    store.totals(job.id(), units.size(), job.totalAudio());
     var segments = new ArrayList<>(store.segments(job.id()));
     if (segments.size() > units.size()) throw new IllegalStateException("GENERATION_PLAN_CHANGED");
     for (int i = 0; i < segments.size(); i++)
@@ -202,17 +205,37 @@ public class GenerationService {
       artifacts.verify(receipt);
     }
     for (int i = receipts.size(); i < groups.size(); i++) {
-      store.state(job.id(), "running", "audio", null, false, null);
-      var group = groups.get(i);
+      var receipt = renderAudio(job, groups.get(i));
+      if (receipt == null) return;
+      store.audio(job.id(), receipt);
+      receipts.add(receipt);
+    }
+    store.state(job.id(), "running", "assembly", null, false, null);
+    String finalPath = artifacts.assemble(job.id(), receipts);
+    store.state(job.id(), "succeeded", "complete", null, false, finalPath);
+  }
+
+  private AudioReceipt renderAudio(Job job, Group group) {
+    var profile = speech.profile();
+    for (int number = 1; number <= AudioRetryPolicy.MAX_ATTEMPTS; number++) {
+      if (Thread.currentThread().isInterrupted())
+        throw new IllegalStateException("PROCESS_INTERRUPTED");
+      store.state(
+          job.id(),
+          "running",
+          number == 1 ? "audio" : "audio_retry:" + (group.order() + 1) + ":" + number,
+          null,
+          false,
+          null);
       UUID attempt = UUID.randomUUID();
       long began = System.nanoTime();
-      var profile = speech.profile();
+      var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
       store.attempt(
           job.id(),
           new Attempt(
               attempt,
               "audio",
-              "group-" + i,
+              "group-" + group.order(),
               profile.provider(),
               profile.model(),
               "attempting",
@@ -220,17 +243,30 @@ public class GenerationService {
               Map.of(),
               null,
               false,
+              null,
+              number,
+              started,
+              null,
+              true,
+              "PENDING",
+              null,
+              null,
               null));
       AudioResult result;
       try {
         result = speech.render(group, job.id(), attempt);
       } catch (Exception e) {
-        result =
-            new AudioResult(new byte[0], "", Metadata.error("PROVIDER_TRANSPORT_FAILURE", true));
+        // An unexpected adapter/local exception is not evidence of a transient provider failure.
+        result = new AudioResult(new byte[0], "", Metadata.error("AUDIO_ADAPTER_FAILURE", false));
       }
       var metadata = result.metadata();
       String error = metadata.errorCode();
-      String path = artifacts.preserve(job.id(), attempt, result.pcm(), result.transcript());
+      String path = null;
+      try {
+        path = artifacts.preserve(job.id(), attempt, result.pcm(), result.transcript());
+      } catch (RuntimeException e) {
+        error = "AUDIO_ARTIFACT_WRITE_FAILURE";
+      }
       AudioReceipt receipt = null;
       if (error == null) {
         try {
@@ -239,23 +275,59 @@ public class GenerationService {
           error = "INVALID_AUDIO_WAVEFORM";
         }
       }
-      finish(job.id(), attempt, "audio", "group-" + i, profile, began, metadata, error);
-      if (error != null) {
-        store.state(
-            job.id(),
-            "failed",
-            "audio",
-            error,
-            metadata.retryable() || error.equals("INVALID_AUDIO_WAVEFORM"),
-            null);
-        return;
+      boolean transientFailure =
+          error != null
+              && error.equals(metadata.errorCode())
+              && AudioRetryPolicy.transientFailure(metadata);
+      Long delay =
+          transientFailure
+                  && number < AudioRetryPolicy.MAX_ATTEMPTS
+                  && !Thread.currentThread().isInterrupted()
+              ? audioRetry.delay(number, metadata)
+              : null;
+      store.attempt(
+          job.id(),
+          new Attempt(
+              attempt,
+              "audio",
+              "group-" + group.order(),
+              profile.provider(),
+              profile.model(),
+              error == null ? "succeeded" : "failed",
+              (System.nanoTime() - began) / 1000000,
+              metadata.usage(),
+              metadata.cost(),
+              transientFailure,
+              error,
+              number,
+              started,
+              java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC),
+              metadata.usage().isEmpty(),
+              error == null ? "SUCCESS" : transientFailure ? "TRANSIENT" : "NON_TRANSIENT",
+              metadata.providerStatus(),
+              metadata.providerCode(),
+              delay));
+      if (error == null) return receipt;
+      if (delay == null) {
+        store.state(job.id(), "failed", "audio", error, transientFailure, null);
+        return null;
       }
-      store.audio(job.id(), receipt);
-      receipts.add(receipt);
+      store.state(
+          job.id(),
+          "running",
+          "audio_retry:" + (group.order() + 1) + ":" + (number + 1),
+          null,
+          false,
+          null);
+      try {
+        // No transaction spans the provider call or this wait.
+        audioRetry.pause(delay);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("PROCESS_INTERRUPTED");
+      }
     }
-    store.state(job.id(), "running", "assembly", null, false, null);
-    String finalPath = artifacts.assemble(job.id(), receipts);
-    store.state(job.id(), "succeeded", "complete", null, false, finalPath);
+    throw new IllegalStateException("AUDIO_ATTEMPT_LIMIT");
   }
 
   private void finish(

@@ -143,7 +143,8 @@ class ProductFlowTest {
         .andExpect(jsonPath("$.status").value("succeeded"))
         .andExpect(jsonPath("$.sourceRevisionId").value(original.sourceRevisionId().toString()))
         .andExpect(jsonPath("$.audioUrl").exists())
-        .andExpect(jsonPath("$.totalEstimatedCost").value(0));
+        .andExpect(jsonPath("$.totalEstimatedCost").value(0))
+        .andExpect(jsonPath("$.costComplete").value(false));
     mvc.perform(get("/api/v1/generations/" + job.id() + "/audio").header("Range", "bytes=0-99"))
         .andExpect(status().isPartialContent())
         .andExpect(header().string("Content-Type", "audio/mp4"));
@@ -168,16 +169,18 @@ class ProductFlowTest {
                 .contentType("application/json")
                 .content("{\"title\":\"Empty\",\"text\":\"\"}"))
         .andExpect(status().isBadRequest());
-    var interrupted = service.start(newer.id(), newer.sourceRevisionId(), UUID.randomUUID());
+    var interrupted = service.start(original.id(), original.sourceRevisionId(), UUID.randomUUID());
+    store.segment(interrupted.id(), service.segments(job.id()).getFirst());
+    store.audio(interrupted.id(), service.audio(job.id()).getFirst());
     assertEquals(interrupted.id(), store.claim().orElseThrow().id());
     store.attempt(
         interrupted.id(),
         new Attempt(
             UUID.randomUUID(),
-            "dialogue",
-            "segment-0",
+            "audio",
+            "group-1",
             "fake",
-            "fake-dialogue",
+            "fake-speech",
             "attempting",
             0,
             Map.of(),
@@ -190,6 +193,15 @@ class ProductFlowTest {
     assertTrue(service.get(interrupted.id()).retryable());
     assertEquals("interrupted", service.attempts(interrupted.id()).getFirst().outcome());
     assertTrue(service.attempts(interrupted.id()).getFirst().retryable());
+    assertNotNull(service.attempts(interrupted.id()).getFirst().endedAt());
+    assertTrue(service.attempts(interrupted.id()).getFirst().usageUnknown());
+    assertEquals(acceptedHash, service.audio(interrupted.id()).getFirst().hash());
+    int beforeResume = speech.calls;
+    service.retry(interrupted.id());
+    service.workOne();
+    assertEquals(Status.succeeded, service.get(interrupted.id()).status());
+    assertEquals(beforeResume + 1, speech.calls);
+    assertEquals(acceptedHash, service.audio(interrupted.id()).getFirst().hash());
   }
 
   @Test

@@ -201,6 +201,17 @@ export interface components {
             estimatedCost?: number;
             retryable: boolean;
             errorCode?: string;
+            attemptNumber?: number;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            endedAt?: string;
+            usageUnknown?: boolean;
+            retryClassification?: string;
+            providerStatus?: number;
+            providerCode?: string;
+            /** Format: int64 */
+            nextRetryDelayMs?: number;
         };
         Generation: {
             /** Format: uuid */

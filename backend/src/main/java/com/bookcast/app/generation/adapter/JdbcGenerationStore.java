@@ -87,7 +87,8 @@ public class JdbcGenerationStore implements GenerationStore {
     db.update(
         "update generations set status='failed',stage='interrupted',error_code='PROCESS_INTERRUPTED',retryable=true where status='running'");
     db.update(
-        "update generation_attempts set payload=jsonb_set(jsonb_set(jsonb_set(payload,'{outcome}',to_jsonb('interrupted'::text)),'{errorCode}',to_jsonb('PROCESS_INTERRUPTED'::text)),'{retryable}','true'::jsonb) where payload->>'outcome'='attempting'");
+        "update generation_attempts set payload=(jsonb_set(jsonb_set(jsonb_set(payload,'{outcome}',to_jsonb('interrupted'::text)),'{errorCode}',to_jsonb('PROCESS_INTERRUPTED'::text)),'{retryable}','true'::jsonb) || jsonb_build_object('endedAt',?::text,'retryClassification','INTERRUPTED','usageUnknown',true)) where payload->>'outcome'='attempting'",
+        java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).toString());
   }
 
   public void state(

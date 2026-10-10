@@ -60,12 +60,8 @@ public class OpenAiSpeech implements SpeechRendering {
                   listener)
               .get(25, TimeUnit.SECONDS);
       listener.done.get(180, TimeUnit.SECONDS);
-    } catch (TimeoutException e) {
-      listener.error = "PROVIDER_TIMEOUT";
-      listener.retryable = true;
     } catch (Exception e) {
-      listener.error = "PROVIDER_TRANSPORT_FAILURE";
-      listener.retryable = true;
+      listener.failure(OpenAiAudioFailures.exception(e));
     } finally {
       if (socket != null) socket.abort();
       listener.closeRaw();
@@ -77,7 +73,10 @@ public class OpenAiSpeech implements SpeechRendering {
             listener.usage,
             model.equals("gpt-realtime-2.1-mini") ? listener.cost : null,
             listener.error,
-            listener.retryable));
+            listener.retryable,
+            listener.providerStatus,
+            listener.providerCode,
+            listener.retryAfterMs));
   }
 
   private class Listener implements WebSocket.Listener {
@@ -89,6 +88,9 @@ public class OpenAiSpeech implements SpeechRendering {
     Double cost;
     String error;
     boolean retryable;
+    Integer providerStatus;
+    String providerCode;
+    Long retryAfterMs;
     boolean requested;
     final OutputStream spool;
     final java.nio.file.Path folder;
@@ -134,7 +136,12 @@ public class OpenAiSpeech implements SpeechRendering {
     }
 
     private void send(WebSocket ws, Object payload) throws Exception {
-      ws.sendText(json.writeValueAsString(payload), true).get(10, TimeUnit.SECONDS);
+      String encoded = json.writeValueAsString(payload);
+      try {
+        ws.sendText(encoded, true).get(10, TimeUnit.SECONDS);
+      } catch (Exception e) {
+        failure(OpenAiAudioFailures.exception(e));
+      }
     }
 
     public void onOpen(WebSocket ws) {
@@ -169,7 +176,7 @@ public class OpenAiSpeech implements SpeechRendering {
                             "speed",
                             .95)))));
       } catch (Exception e) {
-        fail("SESSION_START_FAILURE", true);
+        failure(OpenAiAudioFailures.exception(e));
       }
       ws.request(1);
     }
@@ -237,33 +244,42 @@ public class OpenAiSpeech implements SpeechRendering {
                   java.nio.file.StandardOpenOption.CREATE,
                   java.nio.file.StandardOpenOption.APPEND);
             }
-            case "error" -> fail("PROVIDER_ERROR", true);
+            case "error" -> failure(OpenAiAudioFailures.event(e.path("error")));
             case "response.done" -> {
               var r = e.path("response");
               var u = r.path("usage");
               if (u.isObject()) {
-                usage =
-                    Map.of(
-                        "inputTokens",
-                        u.path("input_tokens").asLong(),
-                        "outputTokens",
-                        u.path("output_tokens").asLong(),
-                        "inputTextTokens",
-                        u.path("input_token_details").path("text_tokens").asLong(),
-                        "outputTextTokens",
-                        u.path("output_token_details").path("text_tokens").asLong(),
-                        "outputAudioTokens",
-                        u.path("output_token_details").path("audio_tokens").asLong());
-                cost =
-                    (usage.get("inputTextTokens") * .6
-                            + usage.get("outputTextTokens") * 2.4
-                            + usage.get("outputAudioTokens") * 20)
-                        / 1000000.0;
+                var reported = new HashMap<String, Long>();
+                usageToken(reported, "inputTokens", u.path("input_tokens"));
+                usageToken(reported, "outputTokens", u.path("output_tokens"));
+                usageToken(
+                    reported, "inputTextTokens", u.path("input_token_details").path("text_tokens"));
+                usageToken(
+                    reported,
+                    "outputTextTokens",
+                    u.path("output_token_details").path("text_tokens"));
+                usageToken(
+                    reported,
+                    "outputAudioTokens",
+                    u.path("output_token_details").path("audio_tokens"));
+                usage = Map.copyOf(reported);
+                if (usage
+                    .keySet()
+                    .containsAll(
+                        Set.of("inputTextTokens", "outputTextTokens", "outputAudioTokens")))
+                  cost =
+                      (usage.get("inputTextTokens") * .6
+                              + usage.get("outputTextTokens") * 2.4
+                              + usage.get("outputAudioTokens") * 20)
+                          / 1000000.0;
               }
-              if (!r.path("status").asText().equals("completed")) fail("INCOMPLETE_AUDIO", true);
-              else if (r.path("output").size() != 1
+              if (!r.path("status").asText().equals("completed")) {
+                if (r.path("status_details").path("error").isObject())
+                  failure(OpenAiAudioFailures.event(r.path("status_details").path("error")));
+                else fail("INCOMPLETE_AUDIO", false);
+              } else if (r.path("output").size() != 1
                   || !r.path("output").get(0).path("role").asText().equals("assistant"))
-                fail("UNEXPECTED_AUDIO_STRUCTURE", true);
+                fail("UNEXPECTED_AUDIO_STRUCTURE", false);
               else done.complete(null);
             }
           }
@@ -276,12 +292,25 @@ public class OpenAiSpeech implements SpeechRendering {
     }
 
     public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
-      if (!done.isDone()) fail("EARLY_SOCKET_CLOSE", true);
+      if (!done.isDone())
+        fail("EARLY_SOCKET_CLOSE", Set.of(1000, 1001, 1006, 1011, 1012, 1013).contains(code));
       return CompletableFuture.completedFuture(null);
     }
 
     public void onError(WebSocket ws, Throwable e) {
-      fail("PROVIDER_TRANSPORT_FAILURE", true);
+      failure(OpenAiAudioFailures.exception(e));
+    }
+
+    void usageToken(Map<String, Long> values, String name, JsonNode value) {
+      if (value.isIntegralNumber() && value.canConvertToLong() && value.asLong() >= 0)
+        values.put(name, value.asLong());
+    }
+
+    void failure(Metadata metadata) {
+      providerStatus = metadata.providerStatus();
+      providerCode = metadata.providerCode();
+      retryAfterMs = metadata.retryAfterMs();
+      fail(metadata.errorCode(), metadata.retryable());
     }
 
     void fail(String code, boolean retry) {

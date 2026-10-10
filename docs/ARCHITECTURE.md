@@ -594,7 +594,7 @@ Preserve safe execution metadata for every generation attempt, including failed 
 - safe provider/error classification,
 - retryability assessment.
 
-Provider-specific exceptions and response structures remain inside infrastructure adapters. Retryability is an assessment, not an instruction to retry automatically. Logging and privacy constraints in section 19 apply to all outcomes.
+Provider-specific exceptions and response structures remain inside infrastructure adapters. Retryability is an assessment. The initial audio worker automatically retries only explicitly classified transient provider failures, with at most three attempts per group per explicit run/resume; dialogue retries remain user-triggered. Logging and privacy constraints in section 19 apply to all outcomes.
 
 ## Retry
 
@@ -773,7 +773,7 @@ The audio adapter uses isolated Realtime contexts and bounded contiguous same-sp
 
 Safe attempt metadata includes capability/unit identity, provider/model, outcome, elapsed time, available usage, estimated USD cost, retryability and bounded error classification. Missing usage is shown as incomplete cost information, not zero measured spend. API credentials, source contents, prompts and raw response bodies are never logged. Source and transcript payloads are available only through the user-facing API and private artifact storage.
 
-`BOOKCAST_AI_MODE=fake` provides deterministic no-network dialogue and test-tone audio for local development and tests. Normal tests use this mode, PostgreSQL Testcontainers and real migrations/encoding. Real provider adapters additionally have offline protocol fixtures. Selecting real adapters alone does not make paid calls; only an explicit Generate/retry action queues provider work.
+`BOOKCAST_AI_MODE=fake` provides deterministic no-network dialogue and test-tone audio for local development and tests. Normal tests use this mode, PostgreSQL Testcontainers and real migrations/encoding. Real provider adapters additionally have offline protocol fixtures. Selecting real adapters alone does not make paid calls; only an explicit Generate/retry action queues provider work. Within that authorized run, transient audio provider failures use bounded jittered backoff (2/8 seconds by default, bounded Retry-After). Every attempt is retained; progress counts accepted checkpoints only. A restart never resumes spending automatically, including when interrupted during backoff. Local waveform/structural validation failures are not automatically retried.
 
 ---
 

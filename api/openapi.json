@@ -970,6 +970,33 @@
           },
           "errorCode": {
             "type": "string"
+          },
+          "attemptNumber": {
+            "type": "integer"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "usageUnknown": {
+            "type": "boolean"
+          },
+          "retryClassification": {
+            "type": "string"
+          },
+          "providerStatus": {
+            "type": "integer"
+          },
+          "providerCode": {
+            "type": "string"
+          },
+          "nextRetryDelayMs": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "required": [

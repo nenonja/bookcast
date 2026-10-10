@@ -10,9 +10,19 @@ public final class Capabilities {
   public record Profile(String provider, String model) {}
 
   public record Metadata(
-      Map<String, Long> usage, Double cost, String errorCode, boolean retryable) {
+      Map<String, Long> usage,
+      Double cost,
+      String errorCode,
+      boolean retryable,
+      Integer providerStatus,
+      String providerCode,
+      Long retryAfterMs) {
     public Metadata {
       usage = Map.copyOf(usage);
+    }
+
+    public Metadata(Map<String, Long> usage, Double cost, String errorCode, boolean retryable) {
+      this(usage, cost, errorCode, retryable, null, null, null);
     }
 
     public static Metadata error(String code, boolean retryable) {

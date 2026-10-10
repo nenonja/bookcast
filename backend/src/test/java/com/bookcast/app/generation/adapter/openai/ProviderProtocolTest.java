@@ -118,6 +118,60 @@ class ProviderProtocolTest {
     checkAudio("incomplete", "INCOMPLETE_AUDIO");
   }
 
+  @Test
+  void structuredAudioErrorsNeverUseProviderMessagesForRetryClassification() throws Exception {
+    for (String code :
+        List.of(
+            "insufficient_quota",
+            "credit_balance_exhausted",
+            "organization_usage_limit_exceeded",
+            "invalid_api_key",
+            "invalid_request_error",
+            "unsupported_model",
+            "unknown_error")) {
+      var m =
+          OpenAiAudioFailures.event(
+              json.readTree(
+                  "{\"code\":\""
+                      + code
+                      + "\",\"message\":\"rate limit timeout server error private content\"}"));
+      assertFalse(m.retryable());
+      assertEquals(code, m.providerCode());
+    }
+    var rateLimit = OpenAiAudioFailures.event(json.readTree("{\"code\":\"rate_limit_exceeded\"}"));
+    assertTrue(rateLimit.retryable());
+    assertEquals(429, rateLimit.providerStatus());
+    assertTrue(OpenAiAudioFailures.event(json.readTree("{\"type\":\"server_error\"}")).retryable());
+    assertFalse(
+        OpenAiAudioFailures.event(
+                json.readTree("{\"type\":\"insufficient_quota\",\"code\":\"rate_limit_exceeded\"}"))
+            .retryable());
+    assertTrue(OpenAiAudioFailures.exception(new java.net.SocketException("ignored")).retryable());
+    assertTrue(OpenAiAudioFailures.exception(new TimeoutException()).retryable());
+    assertFalse(OpenAiAudioFailures.exception(new IllegalArgumentException("ignored")).retryable());
+  }
+
+  @Test
+  void handshakeStatusAndRetryAfterAreSafeAndStructured() {
+    for (int status : List.of(400, 401, 403, 429, 500, 502, 503, 504)) {
+      var response = mock(HttpResponse.class);
+      when(response.statusCode()).thenReturn(status);
+      when(response.headers())
+          .thenReturn(HttpHeaders.of(Map.of("Retry-After", List.of("12")), (a, b) -> true));
+      var metadata =
+          OpenAiAudioFailures.exception(
+              new ExecutionException(new WebSocketHandshakeException(response)));
+      assertEquals(status, metadata.providerStatus());
+      assertEquals(Set.of(429, 500, 502, 503, 504).contains(status), metadata.retryable());
+      assertEquals(12000L, metadata.retryAfterMs());
+      assertNull(metadata.cost());
+      assertTrue(metadata.usage().isEmpty());
+    }
+    var now = java.time.Instant.parse("2026-10-10T12:00:00Z");
+    assertEquals(12000L, OpenAiAudioFailures.retryAfter("Sat, 10 Oct 2026 12:00:12 GMT", now));
+    assertNull(OpenAiAudioFailures.retryAfter("invalid", now));
+  }
+
   private void checkAudio(String status, String expectedError) throws Exception {
     var adapter = new OpenAiSpeech(json, "offline-only", data.toString());
     HttpClient http = mock(HttpClient.class);

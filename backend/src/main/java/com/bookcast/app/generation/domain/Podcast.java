@@ -71,7 +71,49 @@ public final class Podcast {
       Map<String, Long> usage,
       Double estimatedCost,
       boolean retryable,
-      String errorCode) {
+      String errorCode,
+      Integer attemptNumber,
+      java.time.OffsetDateTime startedAt,
+      java.time.OffsetDateTime endedAt,
+      Boolean usageUnknown,
+      String retryClassification,
+      Integer providerStatus,
+      String providerCode,
+      Long nextRetryDelayMs) {
+    public Attempt(
+        UUID id,
+        String capability,
+        String unitKey,
+        String provider,
+        String model,
+        String outcome,
+        long elapsedMs,
+        Map<String, Long> usage,
+        Double estimatedCost,
+        boolean retryable,
+        String errorCode) {
+      this(
+          id,
+          capability,
+          unitKey,
+          provider,
+          model,
+          outcome,
+          elapsedMs,
+          usage,
+          estimatedCost,
+          retryable,
+          errorCode,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null);
+    }
+
     public Attempt {
       usage = Map.copyOf(usage);
     }

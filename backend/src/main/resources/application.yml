@@ -19,3 +19,8 @@ bookcast:
   source-unit-words: 800
   encoding-timeout-seconds: ${BOOKCAST_ENCODING_TIMEOUT_SECONDS:1800}
   worker-enabled: true
+  audio-retry:
+    first-delay-ms: ${BOOKCAST_AUDIO_RETRY_FIRST_DELAY_MS:2000}
+    second-delay-ms: ${BOOKCAST_AUDIO_RETRY_SECOND_DELAY_MS:8000}
+    max-delay-ms: ${BOOKCAST_AUDIO_RETRY_MAX_DELAY_MS:60000}
+    jitter-fraction: ${BOOKCAST_AUDIO_RETRY_JITTER_FRACTION:0.2}
