@@ -97,8 +97,9 @@ final class RealtimeAudioStructure {
       var coordinate = coordinate(event);
       String part = token(event.path("part").path("type"));
       safe.put("contentPartType", part);
-      if ("output_audio".equals(part)) audioCoordinates.add(coordinate);
-      else if ("output_text".equals(part)) otherCoordinates.add(coordinate);
+      // Streaming part types differ from the final message content schema.
+      if ("audio".equals(part)) audioCoordinates.add(coordinate);
+      else if ("text".equals(part)) otherCoordinates.add(coordinate);
       else {
         unknownSchema = true;
         unexpectedTypes.add(part == null ? "MISSING_CONTENT_TYPE" : part);

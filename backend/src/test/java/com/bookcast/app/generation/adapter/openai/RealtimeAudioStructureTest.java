@@ -82,7 +82,7 @@ class RealtimeAudioStructureTest {
         "item", item("msg_1", "message", "assistant", List.of()).put("status", "in_progress"));
     events.add(added);
     var part = coordinate("response.content_part.added", index);
-    part.set("part", json.createObjectNode().put("type", "output_audio"));
+    part.set("part", json.createObjectNode().put("type", "audio"));
     events.add(part);
     events.add(coordinate("response.output_audio.delta", index).put("delta", "AQACAA=="));
     events.add(
@@ -92,6 +92,9 @@ class RealtimeAudioStructureTest {
     events.add(
         coordinate("response.output_audio_transcript.done", index)
             .put("transcript", "SPOKEN_PRIVATE."));
+    var partDone = coordinate("response.content_part.done", index);
+    partDone.set("part", json.createObjectNode().put("type", "audio"));
+    events.add(partDone);
     var itemDone =
         event("response.output_item.done").put("response_id", "resp_1").put("output_index", index);
     itemDone.set("item", audio());
@@ -269,6 +272,38 @@ class RealtimeAudioStructureTest {
   void textOnlyExtrasAreNotHarmless() throws Exception {
     anomaly(
         render(List.of(audio(), item("text_1", "message", "assistant", List.of("output_text")))));
+  }
+
+  @Test
+  void streamingTextCannotRepresentFinalAudio() throws Exception {
+    for (String eventType : List.of("response.content_part.added", "response.content_part.done")) {
+      anomaly(
+          render(
+              List.of(audio()),
+              "completed",
+              events -> {
+                events.stream()
+                    .filter(e -> eventType.equals(e.path("type").asText()))
+                    .forEach(e -> ((ObjectNode) e.path("part")).put("type", "text"));
+              }));
+    }
+  }
+
+  @Test
+  void unknownStreamingContentStopsWithoutRetry() throws Exception {
+    for (String partType : List.of("future_audio_type", "output_audio")) {
+      var r =
+          render(
+              List.of(audio()),
+              "completed",
+              events -> {
+                events.stream()
+                    .filter(e -> e.path("type").asText().startsWith("response.content_part."))
+                    .forEach(e -> ((ObjectNode) e.path("part")).put("type", partType));
+              });
+      assertEquals("PROVIDER_SCHEMA_UNSUPPORTED", r.result().metadata().errorCode());
+      assertFalse(r.result().metadata().retryable());
+    }
   }
 
   @Test
