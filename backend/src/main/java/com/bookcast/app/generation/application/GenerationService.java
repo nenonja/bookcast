@@ -180,10 +180,14 @@ public class GenerationService {
       }
       var metadata = result.metadata();
       String error = metadata.errorCode();
+      Segment acceptedSegment = null;
       if (error == null) {
         try {
           if (result.segment() == null) throw new IllegalArgumentException();
-          result.segment().validate(i, units.get(i).stream().map(ChapterSource.Block::id).toList());
+          acceptedSegment = DialogueText.normalize(result.segment());
+          acceptedSegment.validate(i, units.get(i).stream().map(ChapterSource.Block::id).toList());
+        } catch (DialogueText.SpeakerMismatch e) {
+          error = "DIALOGUE_SPEAKER_PREFIX_MISMATCH";
         } catch (Exception e) {
           error = "INVALID_DIALOGUE_OUTPUT";
         }
@@ -193,8 +197,8 @@ public class GenerationService {
         store.state(job.id(), "failed", "dialogue", error, metadata.retryable(), null);
         return;
       }
-      store.segment(job.id(), result.segment());
-      segments.add(result.segment());
+      store.segment(job.id(), acceptedSegment);
+      segments.add(acceptedSegment);
     }
     var groups = AudioGroups.plan(segments);
     store.totals(job.id(), units.size(), groups.size());
