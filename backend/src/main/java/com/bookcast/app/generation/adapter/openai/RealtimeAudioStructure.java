@@ -3,8 +3,37 @@ package com.bookcast.app.generation.adapter.openai;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.*;
 
-/** Provider-specific correlation and safe diagnostics; never retains event bodies or text. */
+/**
+ * Collects structural evidence for one Realtime speech response and checks its event correlation.
+ *
+ * <p>Each speech-rendering attempt owns a fresh instance. Acceptance requires one completed assistant
+ * message containing only {@code output_audio}; additional completed assistant messages must have
+ * empty content. Audio and transcript deltas must identify that same message, and all recorded audio
+ * and transcript coordinates must match its response ID, output index and content index zero.
+ * Observed streaming items must agree with the final response's item identities.
+ *
+ * <p>Diagnostics retain only selected identifiers, schema tokens, indices, item summaries and event
+ * counts. Provider strings are restricted to 1–200 ASCII letters, digits, underscores, dots or
+ * hyphens. Event bodies, audio bytes, transcript text and usage are not retained. This is structural
+ * validation, not a check of audible completeness or fidelity to the requested script.
+ *
+ * <p>The speech adapter owns transport, session-configuration checks, payload preservation and the
+ * retryability decision. This collector neither writes artifacts nor retries provider calls. Its
+ * observation, validation and snapshot operations are synchronized, but there is no reset or terminal
+ * state preventing further observations; the caller controls the response lifecycle.
+ */
 final class RealtimeAudioStructure {
+  /**
+   * Payload-free summary of an output item in a streaming event or the final response.
+   *
+   * @param id sanitized provider item ID, or {@code null} if absent or invalid
+   * @param outputIndex zero-based output position, or {@code -1} for an invalid streaming index
+   * @param type sanitized item type, or {@code null} if absent or invalid
+   * @param role sanitized message role, or {@code null} if absent or invalid
+   * @param status sanitized item status, or {@code null} if absent or invalid
+   * @param contentPartTypes immutable ordered part types; missing or invalid types use
+   *     {@code MISSING_CONTENT_TYPE}
+   */
   record Item(
       String id,
       int outputIndex,
@@ -13,6 +42,14 @@ final class RealtimeAudioStructure {
       String status,
       List<String> contentPartTypes) {}
 
+  /**
+   * Correlation address from an audio, transcript or content-part event.
+   *
+   * @param responseId sanitized response ID, or {@code null} if absent or invalid
+   * @param itemId sanitized item ID, or {@code null} if absent or invalid
+   * @param outputIndex zero-based output-item index, or {@code -1} if absent or invalid
+   * @param contentIndex zero-based content-part index, or {@code -1} if absent or invalid
+   */
   record Coordinate(String responseId, String itemId, int outputIndex, int contentIndex) {}
 
   private static final Set<String> ACTIONABLE =
@@ -41,6 +78,22 @@ final class RealtimeAudioStructure {
   private Integer outputCount;
   private boolean malformedCorrelation, actionable, unknownSchema;
 
+  /**
+   * Records an event's structural evidence and builds its payload-free journal entry.
+   *
+   * <p>Streaming part types {@code audio}/{@code text} and final item part types
+   * {@code output_audio}/{@code output_text} are distinct schemas. Unsupported item or part types,
+   * missing event types and malformed correlation are recorded for later validation. Other event
+   * types are generally counted without schema validation, though function-call and MCP event
+   * prefixes flag actionable output. A {@code response.done} event supplies the final item list.
+   *
+   * <p>This method does not validate the accumulated response or throw for ordinary missing JSON
+   * fields. Validation remains explicit through {@link #validate()}.
+   *
+   * @param event non-null parsed provider event; payload fields are not retained
+   * @return a new mutable map of selected structural fields, including {@code null} for missing or
+   *     invalid tokens; changing the map does not change this collector
+   */
   synchronized Map<String, Object> observe(JsonNode event) {
     String type = token(event.path("type"));
     events.merge(type == null ? "INVALID_EVENT_TYPE" : type, 1L, Long::sum);
@@ -137,7 +190,23 @@ final class RealtimeAudioStructure {
     return safe;
   }
 
-  /** Null means accepted; unknown schema is deliberately non-retryable. */
+  /**
+   * Evaluates the evidence collected so far and stores the result for subsequent snapshots.
+   *
+   * <p>Unsupported schemas take precedence over an incomplete final status, which takes precedence
+   * over correlation and output-shape failures. Both audio and transcript delta item IDs are
+   * required. Separate {@code .done} events and streaming item events are not required, but their
+   * recorded evidence is checked when present. Text output, actionable items, duplicate final item
+   * IDs and conflicting response or item coordinates cannot pass.
+   *
+   * <p>The speech adapter treats {@code PROVIDER_SCHEMA_UNSUPPORTED} as non-retryable and makes
+   * {@code UNEXPECTED_AUDIO_STRUCTURE} retryable only after session configuration was validated.
+   * This method only returns the classification; it does not schedule another attempt.
+   *
+   * @return {@code null} if the collected structure passes, otherwise
+   *     {@code PROVIDER_SCHEMA_UNSUPPORTED}, {@code INCOMPLETE_AUDIO} or
+   *     {@code UNEXPECTED_AUDIO_STRUCTURE}
+   */
   synchronized String validate() {
     validationCode = validateShape();
     return validationCode;
@@ -197,6 +266,16 @@ final class RealtimeAudioStructure {
     return null;
   }
 
+  /**
+   * Copies the current structural diagnostics for the attempt's final sidecar.
+   *
+   * <p>No validation is performed here. {@code validationCode} is the last result of
+   * {@link #validate()}; {@code null} can mean either acceptance or that validation has not run.
+   * Other fields may be empty or {@code null} when the stream ended before a final response.
+   *
+   * @return a new mutable map with copied collections and payload-free item summaries; the caller
+   *     may add attempt-level diagnostics without changing this collector
+   */
   synchronized Map<String, Object> snapshot() {
     var safe = new LinkedHashMap<String, Object>();
     safe.put("responseId", responseId);

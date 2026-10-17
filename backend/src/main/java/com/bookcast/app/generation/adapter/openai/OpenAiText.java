@@ -11,6 +11,22 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+/**
+ * Adapts Bookcast's text-generation port to synchronous OpenAI Responses requests.
+ *
+ * <p>Translates the requested source blocks, neighboring turns and language identifiers into provider
+ * input, using the bundled {@code dialogue-v1.txt} instructions and a strict JSON output schema.
+ * The prompt is loaded at construction; an unavailable or unreadable resource fails initialization
+ * with {@code PROMPT_RESOURCE_MISSING}. Construction itself makes no provider call.
+ *
+ * <p>The returned segment is a candidate. Deserialization applies the domain records' constructor
+ * checks, but source coverage, expected ordering and dialogue normalization are the application's
+ * responsibility. Neither the provider's schema nor successful parsing establishes source fidelity.
+ *
+ * <p>Owns provider translation, candidate-file preservation and attempt usage/error metadata. It does
+ * not accept checkpoints or retry calls; the application decides whether to retry a failed unit and
+ * supplies a new attempt identity. Raw provider error messages are not included in returned metadata.
+ */
 @Component
 @ConditionalOnProperty(name = "bookcast.ai-mode", havingValue = "openai", matchIfMissing = true)
 public class OpenAiText implements TextGeneration {
@@ -51,6 +67,36 @@ public class OpenAiText implements TextGeneration {
     return new Profile("openai", model);
   }
 
+  /**
+   * Requests a structured dialogue candidate and retains any valid reported usage, including on
+   * HTTP errors, incomplete responses and subsequent candidate-processing failures.
+   *
+   * <p>A blank API key returns {@code API_KEY_MISSING} without connecting. The HTTP request has a
+   * 180-second timeout. For an HTTP 200 response marked {@code completed}, all {@code output_text}
+   * content is concatenated and written to {@code dialogue-candidate.json} under the generation and
+   * attempt IDs before deserialization. Creation refuses to replace an existing candidate, and a
+   * candidate that fails parsing remains available for inspection. Non-200 and incomplete responses
+   * do not write a candidate.
+   *
+   * <p>Usage contains only reported nonnegative integer counts that fit in a {@code long}; missing
+   * or malformed fields are omitted independently, while genuine zeros are retained. Estimated cost
+   * is in USD and is available only for {@code gpt-5.4} when both input and output token counts are
+   * valid. Reasoning-token usage is optional and is not charged separately by this calculation.
+   *
+   * <p>HTTP 429 and 5xx responses are retryable unless structured errors identify quota/billing or
+   * an invalid request, authentication or permission error type. HTTP metadata retains the status,
+   * safe provider code and parsed Retry-After delay in milliseconds. Transport failures use
+   * {@link OpenAiAudioFailures}; interruption restores the interrupt flag. Request construction,
+   * parsing and local persistence failures are non-retryable {@code PROVIDER_OR_SCHEMA_FAILURE}
+   * results. These classifications do not initiate a retry.
+   *
+   * @param r non-null request with source/context data and non-null generation/attempt IDs; the
+   *     attempt must have an unused candidate-file path
+   * @return parsed candidate and metadata; a JSON {@code null} candidate can yield a {@code null}
+   *     segment without an adapter error, which the application must reject. Operational failures
+   *     return a {@code null} segment with error metadata. Unknown cost is {@code null}, and
+   *     unavailable usage fields are absent
+   */
   public TextResult generate(TextRequest r) {
     if (key.isBlank()) return new TextResult(null, Metadata.error("API_KEY_MISSING", false));
     Metadata metadata = Metadata.error("PROVIDER_TRANSPORT_FAILURE", true);

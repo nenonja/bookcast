@@ -13,6 +13,19 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+/**
+ * Renders one prepared same-speaker group through an isolated OpenAI Realtime WebSocket session.
+ *
+ * <p>Requests Finnish delivery of the supplied script text, with HOST voice {@code marin}, EXPERT
+ * voice {@code ash}, speed {@code 0.95} and 24,000 Hz PCM output. Each call configures a new session
+ * and requests a response outside conversation history, with tools disabled. These instructions
+ * request faithful speech; they do not prove that every supplied word was spoken.
+ *
+ * <p>Owns streaming transport, raw attempt files, provider usage and structural validation through
+ * {@link RealtimeAudioStructure}. Audio and transcript deltas are preserved even when an attempt
+ * fails. The application owns retries, checkpoint acceptance, waveform validation and assembly;
+ * this adapter neither resumes an old attempt nor repairs, trims or rerenders its output.
+ */
 @Component
 @ConditionalOnProperty(name = "bookcast.ai-mode", havingValue = "openai", matchIfMissing = true)
 public class OpenAiSpeech implements SpeechRendering {
@@ -45,6 +58,36 @@ public class OpenAiSpeech implements SpeechRendering {
     return new Profile("openai", model);
   }
 
+  /**
+   * Opens a fresh attempt, collects its speech stream and returns the received bytes and transcript
+   * together with success or failure metadata.
+   *
+   * <p>Creates raw files under the job/attempt IDs before checking credentials. Initial PCM,
+   * configuration and structural-journal files use exclusive creation so an existing attempt is not
+   * overwritten. A blank API key returns empty audio/transcript and {@code API_KEY_MISSING} without
+   * connecting, after attempting to write final diagnostics. The connection future is awaited for
+   * up to 25 seconds, followed by up to 180 seconds for listener completion. An acquired socket is
+   * aborted and raw-file finalization is attempted before returning.
+   *
+   * <p>The listener supplies protocol and provider-error classifications; connection/wait exceptions
+   * use {@link OpenAiAudioFailures}. A result with an error can still contain partial audio,
+   * transcript and usage. A result without an error has passed the structural checks, but still
+   * requires the application's waveform validation before acceptance.
+   *
+   * <p>Estimated cost is in USD, only for {@code gpt-realtime-2.1-mini}, and requires valid input-text,
+   * output-text and output-audio token counts from {@code response.done}. Other valid usage fields
+   * are retained independently. Missing counts are not treated as zero, and usage reported on an
+   * incomplete response is retained.
+   *
+   * @param g non-null group already partitioned by the caller; its speaker selects the voice and
+   *     its text is supplied as the script to speak
+   * @param job non-null generation ID used to locate the attempt directory
+   * @param attempt non-null fresh attempt ID whose initial raw files do not yet exist
+   * @return received PCM bytes requested at 24,000 Hz, concatenated transcript deltas and metadata;
+   *     bytes/text may be empty or partial, and unknown cost is {@code null}
+   * @throws IllegalStateException with {@code RAW_ATTEMPT_WRITE_FAILURE} if initial attempt files
+   *     cannot be created; initialization happens before transport exception handling
+   */
   public AudioResult render(Group g, UUID job, UUID attempt) {
     Listener listener = new Listener(g, job, attempt);
     if (key.isBlank()) {
@@ -82,6 +125,18 @@ public class OpenAiSpeech implements SpeechRendering {
             listener.retryAfterMs));
   }
 
+  /**
+   * Holds one attempt's streaming state, raw-file spool and protocol evidence.
+   *
+   * <p>The first matching {@code session.updated} acknowledgement triggers a single response request;
+   * model, voice and speed must match before that request is sent. Fragmented WebSocket text is
+   * assembled into JSON events, whose structural summaries are journaled separately from private
+   * script/transcript payloads. Raw PCM is also accumulated in memory for the returned result.
+   *
+   * <p>The completion future is completed normally for both success and failure: the error fields
+   * distinguish outcomes. Text callbacks ignore further fragments after completion. Completion does
+   * not freeze failure metadata; later failure/finalization calls can replace an earlier error.
+   */
   private class Listener implements WebSocket.Listener {
     final Group group;
     final RealtimeAudioStructure structure = new RealtimeAudioStructure();
@@ -126,6 +181,14 @@ public class OpenAiSpeech implements SpeechRendering {
       }
     }
 
+    /**
+     * Closes the PCM spool and creates the final structural sidecar without replacing an existing
+     * sidecar. Spool-close exceptions are ignored; a sidecar failure records non-retryable
+     * {@code STRUCTURE_DIAGNOSTIC_WRITE_FAILURE}, even if another error was already recorded.
+     *
+     * <p>This operation does not validate the response or remove partial files. It is not idempotent:
+     * exclusive sidecar creation causes a second invocation to record a write failure.
+     */
     synchronized void closeRaw() {
       try {
         spool.close();
@@ -151,6 +214,11 @@ public class OpenAiSpeech implements SpeechRendering {
               : " EXPERT: calm, knowledgeable, engaged, explanatory without lecturing.");
     }
 
+    /**
+     * Serializes a command and waits up to ten seconds for its WebSocket send to complete.
+     * Send/wait exceptions are classified into listener failure state and are not rethrown;
+     * serialization exceptions propagate to the calling callback's handler.
+     */
     private void send(WebSocket ws, Object payload) throws Exception {
       String encoded = json.writeValueAsString(payload);
       try {
@@ -160,6 +228,10 @@ public class OpenAiSpeech implements SpeechRendering {
       }
     }
 
+    /**
+     * Sends the requested audio-session configuration, then requests the first inbound callback.
+     * Script submission is deferred until a matching {@code session.updated} acknowledgement.
+     */
     public void onOpen(WebSocket ws) {
       try {
         send(
@@ -197,6 +269,27 @@ public class OpenAiSpeech implements SpeechRendering {
       ws.request(1);
     }
 
+    /**
+     * Processes one WebSocket text fragment, decoding an event only when its last fragment arrives.
+     *
+     * <p>Before handling an event, appends a payload-free summary to the structural journal. Audio
+     * deltas are decoded, buffered and flushed to the PCM spool; transcript deltas are concatenated
+     * and appended to a separate private journal. Final transcript fields are not substituted for
+     * the accumulated deltas, and no lexical comparison with the script is performed here.
+     *
+     * <p>On {@code response.done}, valid usage is recorded before checking status. A non-completed
+     * response uses its structured provider error if present, otherwise non-retryable
+     * {@code INCOMPLETE_AUDIO}. A completed response must pass structural validation. Only
+     * {@code UNEXPECTED_AUDIO_STRUCTURE} after configuration acknowledgement is marked retryable;
+     * unsupported schemas stop without a retry hint. Event decoding and artifact-writing exceptions
+     * share the non-retryable {@code PROVIDER_EVENT_FORMAT} classification.
+     *
+     * @param ws current provider socket, used to send the script request and request further input
+     * @param data next fragment of the current JSON event
+     * @param last whether this fragment completes the event message
+     * @return an already-completed callback stage; attempt completion is signaled separately through
+     *     {@code done}, and callbacks arriving after that completion are ignored
+     */
     public synchronized CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
       if (done.isDone()) return CompletableFuture.completedFuture(null);
       message.append(data);
@@ -315,6 +408,11 @@ public class OpenAiSpeech implements SpeechRendering {
       return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * Records {@code EARLY_SOCKET_CLOSE} only if the attempt has not completed. Codes 1000, 1001,
+     * 1006, 1011, 1012 and 1013 are marked retryable; other close codes are not. The provider's
+     * human-readable close reason is neither retained nor used for classification.
+     */
     public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
       if (!done.isDone())
         fail("EARLY_SOCKET_CLOSE", Set.of(1000, 1001, 1006, 1011, 1012, 1013).contains(code));
@@ -325,11 +423,19 @@ public class OpenAiSpeech implements SpeechRendering {
       if (!done.isDone()) failure(OpenAiAudioFailures.exception(e));
     }
 
+    /**
+     * Copies a reported nonnegative JSON integer only if it fits in a {@code long}. Absent,
+     * malformed and out-of-range counts remain unknown; a genuinely reported zero is retained.
+     */
     void usageToken(Map<String, Long> values, String name, JsonNode value) {
       if (value.isIntegralNumber() && value.canConvertToLong() && value.asLong() >= 0)
         values.put(name, value.asLong());
     }
 
+    /**
+     * Replaces provider status/code/retry hints and records the failure without discarding any
+     * previously collected audio, transcript or usage.
+     */
     synchronized void failure(Metadata metadata) {
       providerStatus = metadata.providerStatus();
       providerCode = metadata.providerCode();
@@ -337,6 +443,11 @@ public class OpenAiSpeech implements SpeechRendering {
       fail(metadata.errorCode(), metadata.retryable());
     }
 
+    /**
+     * Replaces the current error classification and wakes the rendering caller by completing
+     * {@code done} normally. This is not a first-failure latch: later calls can replace the code and
+     * retry flag even after completion, and provider-specific hints are left unchanged.
+     */
     synchronized void fail(String code, boolean retry) {
       error = code;
       retryable = retry;
