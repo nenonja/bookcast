@@ -116,21 +116,20 @@ public class OpenAiText implements TextGeneration {
         d = json.createObjectNode();
       }
       var usage = d.path("usage");
+      var reported = new HashMap<String, Long>();
+      if (usage.isObject()) {
+        usageToken(reported, "inputTokens", usage.path("input_tokens"));
+        usageToken(reported, "outputTokens", usage.path("output_tokens"));
+        usageToken(
+            reported, "reasoningTokens", usage.path("output_tokens_details").path("reasoning_tokens"));
+      }
       metadata =
           new Metadata(
-              !usage.isObject()
-                  ? Map.of()
-                  : Map.of(
-                      "inputTokens",
-                      usage.path("input_tokens").asLong(),
-                      "outputTokens",
-                      usage.path("output_tokens").asLong(),
-                      "reasoningTokens",
-                      usage.path("output_tokens_details").path("reasoning_tokens").asLong()),
-              !usage.isObject() || !model.equals("gpt-5.4")
+              reported,
+              !model.equals("gpt-5.4")
+                      || !reported.keySet().containsAll(Set.of("inputTokens", "outputTokens"))
                   ? null
-                  : (usage.path("input_tokens").asLong() * 2.5
-                          + usage.path("output_tokens").asLong() * 15)
+                  : (reported.get("inputTokens") * 2.5 + reported.get("outputTokens") * 15)
                       / 1000000.0,
               null,
               false);
@@ -180,5 +179,14 @@ public class OpenAiText implements TextGeneration {
           null,
           new Metadata(metadata.usage(), metadata.cost(), "PROVIDER_OR_SCHEMA_FAILURE", false));
     }
+  }
+
+  /**
+   * Retains a reported nonnegative JSON integer only when it fits in a {@code long}.
+   * Missing, null and malformed values remain absent from the usage map; numeric zero is retained.
+   */
+  private static void usageToken(Map<String, Long> values, String name, JsonNode value) {
+    if (value.isIntegralNumber() && value.canConvertToLong() && value.asLong() >= 0)
+      values.put(name, value.asLong());
   }
 }
