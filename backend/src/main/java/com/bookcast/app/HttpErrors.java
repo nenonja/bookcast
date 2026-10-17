@@ -15,13 +15,19 @@ public class HttpErrors {
 
   @ExceptionHandler({
     IllegalArgumentException.class,
-    MethodArgumentNotValidException.class,
     org.springframework.http.converter.HttpMessageNotReadableException.class,
     org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
     org.springframework.web.method.annotation.HandlerMethodValidationException.class
   })
   public ResponseEntity<ErrorDto> bad() {
     return error(400, "INVALID_REQUEST", "Check the supplied fields.");
+  }
+
+  @ExceptionHandler(MethodArgumentNotValidException.class)
+  public ResponseEntity<ErrorDto> validation(MethodArgumentNotValidException e) {
+    if (e.getBindingResult().hasFieldErrors("chapterNumber"))
+      return error(400, "INVALID_CHAPTER_NUMBER", "Chapter number must be a positive integer.");
+    return bad();
   }
 
   @ExceptionHandler(IllegalStateException.class)

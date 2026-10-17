@@ -13,7 +13,31 @@ public record ChapterSource(
     String sourceLanguage,
     String sourceHash,
     OffsetDateTime createdAt,
-    List<Block> blocks) {
+    List<Block> blocks,
+    Integer chapterNumber) {
+  public ChapterSource(
+      UUID id,
+      UUID bookId,
+      String bookTitle,
+      String title,
+      UUID sourceRevisionId,
+      String sourceLanguage,
+      String sourceHash,
+      OffsetDateTime createdAt,
+      List<Block> blocks) {
+    this(
+        id,
+        bookId,
+        bookTitle,
+        title,
+        sourceRevisionId,
+        sourceLanguage,
+        sourceHash,
+        createdAt,
+        blocks,
+        null);
+  }
+
   public ChapterSource {
     blocks = List.copyOf(blocks);
   }

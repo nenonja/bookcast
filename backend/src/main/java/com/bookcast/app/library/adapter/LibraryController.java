@@ -28,13 +28,13 @@ public class LibraryController implements LibraryApi {
             dto(
                 library.importChapter(
                     r.getBookId(),
-                    r.getBookTitle(),
+                    r.getChapterNumber(),
                     r.getTitle(),
                     r.getText(),
                     r.getSourceLanguage())));
   }
 
-  public ResponseEntity<ChapterDto> importRevision(UUID id, ImportChapterDto r) {
+  public ResponseEntity<ChapterDto> importRevision(UUID id, ImportRevisionDto r) {
     return ResponseEntity.status(201)
         .body(dto(library.importRevision(id, r.getText(), r.getSourceLanguage())));
   }
@@ -45,5 +45,40 @@ public class LibraryController implements LibraryApi {
 
   public ResponseEntity<List<ChapterDto>> listChapters() {
     return ResponseEntity.ok(library.chapters().stream().map(this::dto).toList());
+  }
+
+  public ResponseEntity<BookDto> createBook(CreateBookDto request) {
+    return ResponseEntity.status(201)
+        .body(json.convertValue(library.createBook(request.getTitle()), BookDto.class));
+  }
+
+  public ResponseEntity<List<BookDto>> listBooks() {
+    return ResponseEntity.ok(
+        library.books().stream().map(b -> json.convertValue(b, BookDto.class)).toList());
+  }
+
+  public ResponseEntity<BookDto> getBook(UUID bookId) {
+    return ResponseEntity.ok(json.convertValue(library.book(bookId), BookDto.class));
+  }
+
+  public ResponseEntity<List<ChapterDto>> listBookChapters(UUID bookId) {
+    return ResponseEntity.ok(library.chapters(bookId).stream().map(this::dto).toList());
+  }
+
+  public ResponseEntity<ChapterDto> addBookChapter(UUID bookId, NewChapterDto request) {
+    return ResponseEntity.status(201)
+        .body(
+            dto(
+                library.importChapter(
+                    bookId,
+                    request.getChapterNumber(),
+                    request.getTitle(),
+                    request.getText(),
+                    request.getSourceLanguage())));
+  }
+
+  public ResponseEntity<ChapterDto> moveChapter(UUID chapterId, ChapterPlacementDto request) {
+    return ResponseEntity.ok(
+        dto(library.moveChapter(chapterId, request.getBookId(), request.getChapterNumber())));
   }
 }

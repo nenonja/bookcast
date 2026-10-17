@@ -5,7 +5,17 @@ import java.util.UUID;
 
 public interface Library {
   ChapterSource importChapter(
-      UUID bookId, String bookTitle, String title, String text, String language);
+      UUID bookId, Integer chapterNumber, String title, String text, String language);
+
+  Book createBook(String title);
+
+  List<Book> books();
+
+  Book book(UUID id);
+
+  List<ChapterSource> chapters(UUID bookId);
+
+  ChapterSource moveChapter(UUID chapterId, UUID bookId, Integer chapterNumber);
 
   ChapterSource importRevision(UUID chapterId, String text, String language);
 

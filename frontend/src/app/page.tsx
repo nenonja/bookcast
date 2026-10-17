@@ -1,9 +1,34 @@
 "use client";
-import {useEffect,useState} from "react";
-import {api,type Chapter} from "@/lib/api";
+import {useEffect, useState, type FormEvent} from "react";
+import {api, libraryError, type Book, type Chapter} from "@/lib/api";
 import {useRouter} from "next/navigation";
-export default function Home(){const [chapters,setChapters]=useState<Chapter[]>([]),[error,setError]=useState(""),[busy,setBusy]=useState(false);const router=useRouter();
- useEffect(()=>{api.GET("/api/v1/chapters").then(r=>r.data?setChapters(r.data):setError("Kirjaston lataaminen epäonnistui.")).catch(()=>setError("Palvelimeen ei saada yhteyttä."));},[]);
- async function submit(e:React.FormEvent<HTMLFormElement>){e.preventDefault();setBusy(true);setError("");const f=new FormData(e.currentTarget);try{const r=await api.POST("/api/v1/chapters",{body:{title:String(f.get("title")),bookTitle:String(f.get("bookTitle")),text:String(f.get("text")),sourceLanguage:String(f.get("sourceLanguage"))}});if(r.data)router.push(`/chapters/${r.data.id}`);else setError("Tuonti epäonnistui. Tarkista otsikko ja lähdeteksti.");}catch{setError("Palvelimeen ei saada yhteyttä.");}finally{setBusy(false);}}
- return <><h1>Uusi luku, uusi kuunteluhetki</h1><p>Liitä yhden luvun teksti. Bookcast muuttaa sen suomenkieliseksi oppimiskeskusteluksi.</p>{error&&<p role="alert" className="error">{error}</p>}<section><h2>Tuo luku</h2><form onSubmit={submit}><label htmlFor="bookTitle">Kirjan nimi (valinnainen)</label><input id="bookTitle" name="bookTitle" maxLength={200}/><label htmlFor="title">Luvun nimi</label><input id="title" name="title" required maxLength={200}/><label htmlFor="sourceLanguage">Lähteen kieli</label><select id="sourceLanguage" name="sourceLanguage"><option value="en">Englanti</option><option value="fi">Suomi</option></select><label htmlFor="text">Lähdeteksti</label><textarea id="text" name="text" required maxLength={200000}/><button disabled={busy}>{busy?"Tuodaan…":"Tallenna luku"}</button></form></section><section><h2>Kirjasto</h2>{chapters.length===0?<p>Tuodut luvut näkyvät tässä.</p>:<ul>{chapters.map(c=><li key={c.id}><a href={`/chapters/${c.id}`}>{c.title}</a> <small>{c.bookTitle}</small></li>)}</ul>}</section></>;
+
+export default function Home() {
+  const [books, setBooks] = useState<Book[]>([]), [legacy, setLegacy] = useState<Chapter[]>([]);
+  const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const router = useRouter();
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.GET("/api/v1/books"), api.GET("/api/v1/chapters")]).then(([b,c]) => {
+      if (!active) return;
+      if (b.data && c.data) { setBooks(b.data); setLegacy(c.data.filter(ch => ch.chapterNumber == null)); }
+      else setError("Kirjaston lataaminen epäonnistui.");
+    }).catch(() => {if (active) setError("Palvelimeen ei saada yhteyttä.");});
+    return () => {active = false;};
+  }, []);
+  async function create(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); setBusy(true); setError("");
+    const form = new FormData(e.currentTarget);
+    try {
+      const r = await api.POST("/api/v1/books", {body: {title: String(form.get("title"))}});
+      if (r.data) router.push(`/books/${r.data.id}`); else setError(libraryError(r.error?.code));
+    } catch {setError("Palvelimeen ei saada yhteyttä.");} finally {setBusy(false);}
+  }
+  return <><h1>Kirjasto</h1><p>Avaa kirja tai luo uusi. Lisää ja kuuntele sen luvut omaan tahtiisi.</p>
+    {error && <p role="alert" className="error">{error}</p>}
+    <section><h2>Kirjat</h2>{books.length ? <ul>{books.map(b => <li key={b.id}><a href={`/books/${b.id}`}>{b.title}</a></li>)}</ul> : <p>Ei vielä kirjoja.</p>}</section>
+    <section><h2>Luo kirja</h2><form onSubmit={create}><label htmlFor="book-title">Kirjan nimi</label><input id="book-title" name="title" required maxLength={200}/><button disabled={busy}>{busy ? "Tallennetaan…" : "Luo kirja"}</button></form></section>
+    {legacy.length > 0 && <section><h2>Järjestettävät vanhat luvut</h2><p>Vanhojen tuontien kirjat ja lähteet on säilytetty. Valitse luvulle oikea kirja ja numero sen sivulta. Ääntä ei generoida uudelleen.</p>
+      <ul>{legacy.map(c => <li key={c.id}><a href={`/chapters/${c.id}`}>{c.title}</a> <small>Nykyinen kirja: {c.bookTitle} · numero puuttuu</small></li>)}</ul></section>}
+  </>;
 }

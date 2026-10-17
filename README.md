@@ -1,6 +1,6 @@
 # Bookcast
 
-Paste one chapter, generate a source-grounded Finnish HOST/EXPERT podcast, and listen in the browser. Chapters work independently; importing a whole book is unnecessary.
+Create or open a book, paste a numbered chapter, generate a source-grounded Finnish HOST/EXPERT podcast, and listen in the browser. Chapters work independently; importing a whole book is unnecessary.
 
 ## Run locally
 
@@ -61,6 +61,14 @@ npm --prefix frontend run build
 
 Backend tests require Docker and ffmpeg. They use PostgreSQL Testcontainers, fake adapters and offline provider fixtures; **normal tests make no paid calls**, even if an API key exists in the environment. Architecture verification runs with the test suite.
 
+## Books and existing chapters
+
+Open the library, create or select a Book, and add chapters with explicit positive numbers. Numbers are unique within a Book; chapters are listed numerically. Each chapter keeps its existing `/chapters/{id}` URL, generation controls, player and download.
+
+Older imports already have Book associations but no reliable chapter numbers. Migration V3 preserves every existing Book and Chapter ID and association and leaves their numbers unset—no guessing from titles and no automatic regrouping. They appear under **Järjestettävät vanhat luvut** and at the end of their current Book. Open a chapter and use **Kirja ja luvun numero** to select the correct Book and number (create the Book first if needed). This changes organization only: SourceRevision/SourceBlock IDs, generation jobs, paid checkpoints and audio files are untouched. Duplicate target numbers are rejected without moving the chapter. Previously created empty Books are retained; deletion/merging and bulk reordering are out of scope.
+
+The book API is `/api/v1/books` and `/api/v1/books/{bookId}/chapters`. Organization uses `PUT /api/v1/chapters/{chapterId}/placement`. The existing top-level chapter import URL remains, now requiring `bookId` and `chapterNumber`; revision imports remain independent of organization. No earlier-chapter source or dialogue is sent to AI; cross-chapter context is deferred.
+
 ## Contract and persistence
 
 `api/openapi.json` is authoritative. Maven generates Java endpoint interfaces and DTOs. Regenerate the browser types after contract changes:
@@ -73,6 +81,7 @@ Flyway migrations:
 
 - V1: books, chapters, immutable source revisions and ordered source blocks.
 - V2: generation jobs, immutable script/audio checkpoints and safe attempts.
+- V3: nullable legacy chapter numbers, positive-number check and unique `(book_id, chapter_number)` constraint. New imports and moves require a positive integer in the application/API; only legacy chapters may remain unnumbered.
 
 The `library` and `generation` modules are checked by Spring Modulith and ArchUnit. Generation uses the library public API; provider transports exist only in outbound adapters. Source-block references establish provenance, not semantic fidelity.
 

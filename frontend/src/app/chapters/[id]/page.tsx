@@ -2,6 +2,7 @@
 import {use, useEffect, useState} from "react";
 import {api, type Chapter, type Generation} from "@/lib/api";
 import ChapterAudio from "@/components/ChapterAudio";
+import ChapterPlacementForm from "@/components/ChapterPlacementForm";
 
 export default function ChapterPage({params}: { params: Promise<{ id: string }> }) {
     const {id} = use(params);
@@ -72,7 +73,7 @@ export default function ChapterPage({params}: { params: Promise<{ id: string }> 
     if (!chapter) return <p role="status">{error || "Ladataan…"}</p>;
     const active = job && ["queued", "running"].includes(job.status), cost = (value: number) => `$${value.toFixed(3)}`;
     return <><a href="/">← Kirjasto</a><h1>{chapter.title}</h1>
-        <p>{chapter.bookTitle} · {chapter.blocks.filter(b => !b.excludedReason).length} lähdelohkoa</p>{error &&
+        <p><a href={`/books/${chapter.bookId}`}>{chapter.bookTitle}</a> · {chapter.chapterNumber == null ? "Numero puuttuu" : `Luku ${chapter.chapterNumber}`} · {chapter.blocks.filter(b => !b.excludedReason).length} lähdelohkoa</p>{error &&
             <p role="alert" className="error">{error}</p>}
         <section><h2>Podcast</h2>{!job && <><p>Luodaan suomenkielinen HOST/EXPERT-keskustelu ja kuunneltava
             äänitiedosto. Generointi käyttää maksullisia AI-palveluita.</p>
@@ -96,6 +97,7 @@ export default function ChapterPage({params}: { params: Promise<{ id: string }> 
             </>}{job.attempts.some(a => a.provider === "fake") &&
                 <p>Paikallinen maksuton esikatselu: ääni on testiääntä.</p>}</>}</section>
         {job && <ChapterAudio key={job.id} job={job}/>}
+        <ChapterPlacementForm chapter={chapter} onSaved={setChapter}/>
         <details>
             <summary>Lähdeteksti ja normalisointi</summary>
             {chapter.blocks.map(b => <article key={b.id}>{b.excludedReason &&

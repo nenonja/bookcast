@@ -5,6 +5,8 @@ spring:
     password: ${DATABASE_PASSWORD:bookcast}
   jackson:
     default-property-inclusion: non_null
+    deserialization:
+      accept-float-as-int: false
   mvc:
     log-request-details: false
 server:

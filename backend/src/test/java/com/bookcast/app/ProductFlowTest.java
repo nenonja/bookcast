@@ -89,7 +89,11 @@ class ProductFlowTest {
   void usableFlowImmutabilityIdempotencyAndCheckpointRetry() throws Exception {
     var chapter =
         library.importChapter(
-            null, null, "Test chapter", "First important argument.\n\nSecond qualification.", "en");
+            library.createBook("Test book").id(),
+            1,
+            "Test chapter",
+            "First important argument.\n\nSecond qualification.",
+            "en");
     var original = chapter;
     assertThrows(
         org.springframework.dao.DataAccessException.class,
@@ -164,6 +168,16 @@ class ProductFlowTest {
     assertTrue(disposition.getFilename().endsWith("Test chapter.m4a"));
     assertEquals(callsBeforeDownload, speech.calls);
     assertEquals(attemptsBeforeDownload, service.attempts(job.id()));
+    var organizedBook = library.createBook("Organized book");
+    library.moveChapter(original.id(), organizedBook.id(), 5);
+    assertEquals(original.id(), service.get(job.id()).chapterId());
+    assertEquals(original.sourceRevisionId(), service.get(job.id()).sourceRevisionId());
+    mvc.perform(get("/api/v1/generations/" + job.id() + "/audio/download"))
+        .andExpect(status().isOk())
+        .andExpect(content().bytes(finalBytes));
+    mvc.perform(get("/api/v1/generations/" + job.id() + "/audio").header("Range", "bytes=0-99"))
+        .andExpect(status().isPartialContent());
+    assertEquals(callsBeforeDownload, speech.calls);
     mvc.perform(
             post("/api/v1/chapters")
                 .contentType("application/json")
@@ -208,8 +222,8 @@ class ProductFlowTest {
   void downloadReadinessMissingArtifactsAndSafeFinnishFilename() throws Exception {
     var chapter =
         library.importChapter(
-            null,
-            "Älykäs kirja",
+            library.createBook("Älykäs kirja").id(),
+            1,
             "Luku: käyttöoikeudet/ääni\r\n",
             "A useful source paragraph.",
             "en");
