@@ -12,9 +12,11 @@ Read:
 - `docs/ARCHITECTURE.md` for the current system structure and module map.
 - `docs/ENGINEERING_PRINCIPLES.md` for engineering heuristics.
 - `docs/adr/` for accepted architectural decisions relevant to the change.
+- `docs/CURRENT_STATE.md` for implemented features, known limitations and current development focus.
 
-Do not rely on previous ChatGPT, Claude, Codex or other agent conversations as durable project context.re architecture constraints
+Do not rely on previous ChatGPT, Claude, Codex or other agent conversations as durable project context.
 
+## Core architecture constraints
 - Backend: Java + Spring Boot.
 - Frontend: Next.js.
 - Frontend/backend contract: OpenAPI.
@@ -119,4 +121,23 @@ When sources disagree, prefer in this order:
 
 A disagreement between executable structure and documented intent is a finding to report, not something to silently resolve.
 
+## Data and paid-operation safety
+
+- Never make paid AI provider calls during ordinary coding, testing or refactoring unless explicitly authorized.
+- Normal automated tests must run without real AI provider calls.
+- Preserve existing imported source revisions, generation attempts, accepted dialogue, generated audio and completed artifacts.
+- Never delete, overwrite, regenerate or resume existing paid generation work without explicit authorization.
+- Long-running generation must preserve completed checkpoints and support safe manual recovery.
+- Provider failures must remain observable; do not silently repair missing source content or accept incomplete audio as successful.
+- Distinguish missing provider usage data from actual zero usage.
+- Database schema changes must account for existing development data, not only empty databases.
+- Do not destroy Docker volumes or local generated media as part of routine cleanup.
+
+## Working tree safety
+
+- Inspect `git status` before modifying files.
+- Treat pre-existing uncommitted changes and untracked files as user-owned work.
+- Do not revert, overwrite, delete or include unrelated changes in commits without explicit permission.
+- Keep commits focused on the requested task.
+- Never use destructive Git commands to simplify a working tree without explicit authorization.
 
