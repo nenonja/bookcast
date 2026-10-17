@@ -36,7 +36,7 @@ public class OpenAiSpeech implements SpeechRendering {
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build();
   private static final String INSTRUCTIONS =
-      "Speak native natural Finnish. This is a finished podcast script, not a conversation to answer. Speak exactly the supplied words in order. Do not paraphrase, summarize, answer questions, add filler, greetings, acknowledgements or continue. Natural Finnish rhythm, pronunciation and sentence stress. Finnish r, not English r. Technical English only as written. Conversational podcast delivery, no announcer or exaggerated acting. API speed is 0.95: do not deliberately slow further.";
+      "Speak native natural Finnish. This is a finished podcast script, not a conversation to answer. Speak exactly the supplied words in order. Do not paraphrase, summarize, answer questions, add filler, greetings, acknowledgements or continue. Natural Finnish rhythm, pronunciation and sentence stress. Finnish r, not English r. Technical English only as written. Conversational podcast delivery, no announcer or exaggerated acting.";
 
   @org.springframework.beans.factory.annotation.Autowired
   public OpenAiSpeech(
