@@ -144,59 +144,15 @@ public class GenerationService {
       store.state(job.id(), "running", "dialogue", null, false, null);
       var previous = segments.isEmpty() ? List.<Turn>of() : segments.getLast().dialogueTurns();
       previous = previous.subList(Math.max(0, previous.size() - 4), previous.size());
-      UUID attempt = UUID.randomUUID();
-      long began = System.nanoTime();
-      var profile = text.profile();
-      store.attempt(
-          job.id(),
-          new Attempt(
-              attempt,
-              "dialogue",
-              "segment-" + i,
-              profile.provider(),
-              profile.model(),
-              "attempting",
-              0,
-              Map.of(),
-              null,
-              false,
-              null));
-      TextResult result;
-      try {
-        result =
-            text.generate(
-                new TextRequest(
-                    job.id(),
-                    attempt,
-                    i,
-                    units.get(i),
-                    List.copyOf(previous),
-                    i == 0,
-                    i == units.size() - 1,
-                    source.sourceLanguage(),
-                    "fi"));
-      } catch (Exception e) {
-        result = new TextResult(null, Metadata.error("PROVIDER_TRANSPORT_FAILURE", true));
-      }
-      var metadata = result.metadata();
-      String error = metadata.errorCode();
-      Segment acceptedSegment = null;
-      if (error == null) {
-        try {
-          if (result.segment() == null) throw new IllegalArgumentException();
-          acceptedSegment = DialogueText.normalize(result.segment());
-          acceptedSegment.validate(i, units.get(i).stream().map(ChapterSource.Block::id).toList());
-        } catch (DialogueText.SpeakerMismatch e) {
-          error = "DIALOGUE_SPEAKER_PREFIX_MISMATCH";
-        } catch (Exception e) {
-          error = "INVALID_DIALOGUE_OUTPUT";
-        }
-      }
-      finish(job.id(), attempt, "dialogue", "segment-" + i, profile, began, metadata, error);
-      if (error != null) {
-        store.state(job.id(), "failed", "dialogue", error, metadata.retryable(), null);
-        return;
-      }
+      Segment acceptedSegment =
+          renderDialogue(
+              job,
+              i,
+              units.get(i),
+              List.copyOf(previous),
+              i == units.size() - 1,
+              source.sourceLanguage());
+      if (acceptedSegment == null) return;
       store.segment(job.id(), acceptedSegment);
       segments.add(acceptedSegment);
     }
@@ -334,28 +290,120 @@ public class GenerationService {
     throw new IllegalStateException("AUDIO_ATTEMPT_LIMIT");
   }
 
-  private void finish(
-      UUID job,
-      UUID id,
-      String capability,
-      String unit,
-      Profile profile,
-      long begin,
-      Metadata metadata,
-      String error) {
-    store.attempt(
-        job,
-        new Attempt(
-            id,
-            capability,
-            unit,
-            profile.provider(),
-            profile.model(),
-            error == null ? "succeeded" : "failed",
-            (System.nanoTime() - begin) / 1000000,
-            metadata.usage(),
-            metadata.cost(),
-            metadata.retryable(),
-            error));
+  private Segment renderDialogue(
+      Job job,
+      int order,
+      List<ChapterSource.Block> blocks,
+      List<Turn> previous,
+      boolean last,
+      String sourceLanguage) {
+    var profile = text.profile();
+    for (int number = 1; number <= DialogueRetryPolicy.MAX_ATTEMPTS; number++) {
+      if (Thread.currentThread().isInterrupted())
+        throw new IllegalStateException("PROCESS_INTERRUPTED");
+      store.state(job.id(), "running", "dialogue", null, false, null);
+      UUID attempt = UUID.randomUUID();
+      long began = System.nanoTime();
+      var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
+      store.attempt(
+          job.id(),
+          new Attempt(
+              attempt,
+              "dialogue",
+              "segment-" + order,
+              profile.provider(),
+              profile.model(),
+              "attempting",
+              0,
+              Map.of(),
+              null,
+              false,
+              null,
+              number,
+              started,
+              null,
+              true,
+              "PENDING",
+              null,
+              null,
+              null));
+      TextResult result;
+      try {
+        result =
+            text.generate(
+                new TextRequest(
+                    job.id(),
+                    attempt,
+                    order,
+                    blocks,
+                    previous,
+                    order == 0,
+                    last,
+                    sourceLanguage,
+                    "fi"));
+      } catch (Exception e) {
+        // Unexpected local/adapter exceptions are not evidence of a transient provider failure.
+        result = new TextResult(null, Metadata.error("DIALOGUE_ADAPTER_FAILURE", false));
+      }
+      var metadata = result.metadata();
+      String error = metadata.errorCode();
+      Segment accepted = null;
+      if (error == null) {
+        try {
+          if (result.segment() == null) throw new IllegalArgumentException();
+          accepted = DialogueText.normalize(result.segment());
+          accepted.validate(order, blocks.stream().map(ChapterSource.Block::id).toList());
+        } catch (DialogueText.SpeakerMismatch e) {
+          error = "DIALOGUE_SPEAKER_PREFIX_MISMATCH";
+        } catch (Exception e) {
+          error = "INVALID_DIALOGUE_OUTPUT";
+        }
+      }
+      boolean transientFailure =
+          error != null
+              && error.equals(metadata.errorCode())
+              && DialogueRetryPolicy.transientFailure(metadata);
+      Long delay =
+          transientFailure
+                  && number < DialogueRetryPolicy.MAX_ATTEMPTS
+                  && !Thread.currentThread().isInterrupted()
+              ? audioRetry.delay(number, metadata)
+              : null;
+      store.attempt(
+          job.id(),
+          new Attempt(
+              attempt,
+              "dialogue",
+              "segment-" + order,
+              profile.provider(),
+              profile.model(),
+              error == null ? "succeeded" : "failed",
+              (System.nanoTime() - began) / 1000000,
+              metadata.usage(),
+              metadata.cost(),
+              transientFailure,
+              error,
+              number,
+              started,
+              java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC),
+              metadata.usage().isEmpty(),
+              error == null ? "SUCCESS" : transientFailure ? "TRANSIENT" : "NON_TRANSIENT",
+              metadata.providerStatus(),
+              metadata.providerCode(),
+              delay));
+      if (error == null) return accepted;
+      if (delay == null) {
+        store.state(job.id(), "failed", "dialogue", error, transientFailure, null);
+        return null;
+      }
+      try {
+        // Reuse existing 2s/8s + jitter / Retry-After timing; no transaction spans this wait.
+        audioRetry.pause(delay);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("PROCESS_INTERRUPTED");
+      }
+    }
+    throw new IllegalStateException("DIALOGUE_ATTEMPT_LIMIT");
   }
 }

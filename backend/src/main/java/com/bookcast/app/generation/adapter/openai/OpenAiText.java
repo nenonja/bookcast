@@ -95,8 +95,26 @@ public class OpenAiText implements TextGeneration {
               .header("Content-Type", "application/json")
               .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
               .build();
-      var response = http.send(request, HttpResponse.BodyHandlers.ofString());
-      var d = json.readTree(response.body());
+      HttpResponse<String> response;
+      try {
+        response = http.send(request, HttpResponse.BodyHandlers.ofString());
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return new TextResult(null, Metadata.error("PROCESS_INTERRUPTED", false));
+      } catch (java.io.IOException e) {
+        var failure = OpenAiAudioFailures.exception(e);
+        return new TextResult(null, failure);
+      }
+      JsonNode d;
+      try {
+        d = json.readTree(response.body());
+        if (d == null) d = json.createObjectNode();
+      } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+        if (response.statusCode() == 200)
+          return new TextResult(null, Metadata.error("PROVIDER_OR_SCHEMA_FAILURE", false));
+        // HTML/empty transient error responses still have a useful structured HTTP status.
+        d = json.createObjectNode();
+      }
       var usage = d.path("usage");
       metadata =
           new Metadata(
@@ -116,14 +134,31 @@ public class OpenAiText implements TextGeneration {
                       / 1000000.0,
               null,
               false);
-      if (response.statusCode() != 200)
+      if (response.statusCode() != 200) {
+        int status = response.statusCode();
+        var providerError = OpenAiAudioFailures.event(d.path("error"));
+        boolean quota = "PROVIDER_QUOTA".equals(providerError.errorCode());
+        String type = d.path("error").path("type").asText();
+        boolean invalid =
+            Set.of("invalid_request_error", "authentication_error", "permission_error")
+                .contains(type);
+        Long retryAfter =
+            response.headers() == null
+                ? null
+                : OpenAiAudioFailures.retryAfter(
+                    response.headers().firstValue("Retry-After").orElse(null),
+                    java.time.Instant.now());
         return new TextResult(
             null,
             new Metadata(
                 metadata.usage(),
                 metadata.cost(),
-                "PROVIDER_HTTP_" + response.statusCode(),
-                response.statusCode() == 429 || response.statusCode() >= 500));
+                quota ? "PROVIDER_QUOTA" : "PROVIDER_HTTP_" + status,
+                !quota && !invalid && (status == 429 || status >= 500 && status <= 599),
+                status,
+                providerError.providerCode(),
+                retryAfter));
+      }
       if (!d.path("status").asText().equals("completed"))
         return new TextResult(
             null, new Metadata(metadata.usage(), metadata.cost(), "INCOMPLETE_DIALOGUE", false));
@@ -139,13 +174,11 @@ public class OpenAiText implements TextGeneration {
           output.toString(),
           java.nio.file.StandardOpenOption.CREATE_NEW);
       return new TextResult(json.readValue(output.toString(), Segment.class), metadata);
-    } catch (java.net.http.HttpTimeoutException e) {
-      return new TextResult(
-          null, new Metadata(metadata.usage(), metadata.cost(), "PROVIDER_TIMEOUT", true));
     } catch (Exception e) {
+      // Request construction, parsing and local persistence failures must not spend retry calls.
       return new TextResult(
           null,
-          new Metadata(metadata.usage(), metadata.cost(), "PROVIDER_OR_SCHEMA_FAILURE", true));
+          new Metadata(metadata.usage(), metadata.cost(), "PROVIDER_OR_SCHEMA_FAILURE", false));
     }
   }
 }
