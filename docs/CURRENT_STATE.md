@@ -1,6 +1,6 @@
 # Bookcast Current State
 
-Last reviewed: 2026-10-17.
+Last reviewed: 2026-10-18.
 
 This document describes the current application implementation and development focus. It is not an inventory of the owner's local database, paid jobs or media files, and does not imply that a particular local instance has applied every migration.
 
@@ -37,7 +37,7 @@ Create/open Book
 - ScriptSegments reference source block IDs and contain structured HOST/EXPERT DialogueTurns. New dialogue is structurally validated before checkpointing. A matching leading speaker label is removed from newly generated turn text; an opposite-speaker prefix is rejected. Existing saved dialogue is not rewritten.
 - Audio rendering uses isolated contexts and bounded contiguous same-speaker groups. Attempts preserve raw PCM, transcripts, safe metadata and structural diagnostics. Acceptance checks streaming-event correlation and deterministic waveform plausibility. Transcript lexical differences remain visible and do not trigger automatic rerendering.
 - Accepted dialogue segments and audio groups are checkpoints. Resume validates and reuses them, starts at the first missing unit, and can repeat assembly without regenerating accepted audio.
-- Transient provider failures have bounded automatic retries: at most three attempts per missing dialogue segment or audio group per run/resume, with 2/8-second backoff plus jitter and bounded Retry-After handling. Request/configuration/auth/quota errors and local validation failures do not receive automatic retries. Every attempt retains available usage; missing usage/cost remains explicitly unknown.
+- Transient provider failures have bounded automatic retries: at most three attempts per missing dialogue segment or audio group per run/resume, using Resilience4j's high-level retry execution and default randomized exponential backoff. A valid Retry-After is never shortened: values above 60 seconds stop automatic retries and require explicit manual recovery. Request/configuration/auth/quota errors and local validation failures do not receive automatic retries. Every attempt retains available usage; missing usage/cost remains explicitly unknown.
 - Generate requests have an idempotency key. Startup recovery marks interrupted running work failed; it does not automatically resume that paid work. The owner can explicitly retry/resume from the UI.
 - Local assembly adds 200/350 ms pauses, performs one AAC-LC M4A encode, checks complete decoding and records a final hash. Encoding has a separate timeout from provider calls.
 

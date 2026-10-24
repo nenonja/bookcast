@@ -1,37 +1,80 @@
 package com.bookcast.app.generation.application;
 
 import com.bookcast.app.generation.application.Capabilities.Metadata;
+import io.github.resilience4j.core.IntervalFunction;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.retry.RetryConfig;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Value;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Component;
 
+/** Uses Resilience4j's standard randomized exponential backoff for recorded generation attempts. */
 @Component
 public class AudioRetryPolicy {
   public static final int MAX_ATTEMPTS = 3;
+  private static final long MAX_RETRY_AFTER_MS = 60000;
+  private final IntervalFunction backoff;
 
-  public interface Timing {
-    double jitter();
-
-    void pause(long milliseconds) throws InterruptedException;
+  public AudioRetryPolicy() {
+    this(IntervalFunction.ofExponentialRandomBackoff());
   }
 
-  private final Timing timing;
-  private final long firstMs, secondMs, maxMs;
-  private final double jitterFraction;
+  /** Allows an alternate library backoff policy, for example zero-delay offline tests. */
+  public AudioRetryPolicy(IntervalFunction backoff) {
+    this.backoff = backoff;
+  }
 
-  public AudioRetryPolicy(
-      Timing timing,
-      @Value("${bookcast.audio-retry.first-delay-ms:2000}") long firstMs,
-      @Value("${bookcast.audio-retry.second-delay-ms:8000}") long secondMs,
-      @Value("${bookcast.audio-retry.max-delay-ms:60000}") long maxMs,
-      @Value("${bookcast.audio-retry.jitter-fraction:0.2}") double jitterFraction) {
-    if (firstMs < 0 || secondMs < firstMs || maxMs <= 0 || jitterFraction < 0 || jitterFraction > 1)
-      throw new IllegalArgumentException("INVALID_AUDIO_RETRY_CONFIG");
-    this.timing = timing;
-    this.firstMs = firstMs;
-    this.secondMs = secondMs;
-    this.maxMs = maxMs;
-    this.jitterFraction = jitterFraction;
+  /**
+   * A single provider attempt and its completed outcome. The completion callback persists timing,
+   * usage and errors with the next delay in milliseconds, or null when no retry is scheduled.
+   * It is invoked once, before the library waits or returns the final result.
+   */
+  public record Result<T>(
+      T value,
+      String errorCode,
+      boolean transientFailure,
+      Metadata metadata,
+      Consumer<Long> complete) {}
+
+  /**
+   * Executes one missing unit with at most three attempts. Exceptions are never retried; only
+   * explicitly classified transient results qualify. A server wait longer than 60 seconds defers
+   * the unit for manual recovery instead of retrying early. Every invocation starts a fresh retry
+   * execution; accepted checkpoints are selected by the caller before entering this method.
+   */
+  public <T> Result<T> execute(String name, Supplier<Result<T>> attempt) {
+    var config =
+        RetryConfig.<Result<T>>custom()
+            .maxAttempts(MAX_ATTEMPTS)
+            .retryOnException(error -> false)
+            .retryOnResult(result ->
+                result.transientFailure()
+                    && !Thread.currentThread().isInterrupted()
+                    && (result.metadata().retryAfterMs() == null
+                        || result.metadata().retryAfterMs() <= MAX_RETRY_AFTER_MS))
+            .intervalBiFunction((number, outcome) -> {
+              var result = outcome.get();
+              Long hint = result.metadata().retryAfterMs();
+              long delay = Math.max(backoff.apply(number), hint == null ? 0 : hint);
+              result.complete().accept(delay);
+              return delay;
+            })
+            .build();
+    try {
+      var result =
+          Retry.of(name, config).executeSupplier(() -> {
+            if (Thread.currentThread().isInterrupted())
+              throw new IllegalStateException("PROCESS_INTERRUPTED");
+            return attempt.get();
+          });
+      result.complete().accept(null);
+      return result;
+    } catch (RuntimeException error) {
+      if (Thread.currentThread().isInterrupted())
+        throw new IllegalStateException("PROCESS_INTERRUPTED");
+      throw error;
+    }
   }
 
   public static boolean transientFailure(Metadata m) {
@@ -51,16 +94,5 @@ public class AudioRetryPolicy {
             "PROVIDER_HTTP_503",
             "PROVIDER_HTTP_504")
         .contains(m.errorCode());
-  }
-
-  public long delay(int failedAttempt, Metadata m) {
-    long base = failedAttempt == 1 ? firstMs : secondMs;
-    double jitter = Math.max(0, Math.min(1, timing.jitter()));
-    long backoff = (long) (base * (1 + jitterFraction * jitter));
-    return Math.min(maxMs, Math.max(backoff, m.retryAfterMs() == null ? 0 : m.retryAfterMs()));
-  }
-
-  public void pause(long delay) throws InterruptedException {
-    timing.pause(delay);
   }
 }

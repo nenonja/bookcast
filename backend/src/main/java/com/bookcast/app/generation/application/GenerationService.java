@@ -5,6 +5,7 @@ import com.bookcast.app.generation.domain.*;
 import com.bookcast.app.generation.domain.Podcast.*;
 import com.bookcast.app.library.*;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -176,118 +177,107 @@ public class GenerationService {
   }
 
   private AudioReceipt renderAudio(Job job, Group group) {
+    var number = new AtomicInteger();
+    var result =
+        audioRetry.execute(
+            "audio-group", () -> renderAudioAttempt(job, group, number.incrementAndGet()));
+    if (result.errorCode() != null) {
+      store.state(job.id(), "failed", "audio", result.errorCode(), result.transientFailure(), null);
+      return null;
+    }
+    return result.value();
+  }
+
+  private AudioRetryPolicy.Result<AudioReceipt> renderAudioAttempt(Job job, Group group, int number) {
     var profile = speech.profile();
-    for (int number = 1; number <= AudioRetryPolicy.MAX_ATTEMPTS; number++) {
-      if (Thread.currentThread().isInterrupted())
-        throw new IllegalStateException("PROCESS_INTERRUPTED");
-      store.state(
-          job.id(),
-          "running",
-          number == 1 ? "audio" : "audio_retry:" + (group.order() + 1) + ":" + number,
-          null,
-          false,
-          null);
-      UUID attempt = UUID.randomUUID();
-      long began = System.nanoTime();
-      var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
-      store.attempt(
-          job.id(),
-          new Attempt(
-              attempt,
-              "audio",
-              "group-" + group.order(),
-              profile.provider(),
-              profile.model(),
-              "attempting",
-              0,
-              Map.of(),
-              null,
-              false,
-              null,
-              number,
-              started,
-              null,
-              true,
-              "PENDING",
-              null,
-              null,
-              null));
-      AudioResult result;
+    store.state(
+        job.id(),
+        "running",
+        number == 1 ? "audio" : "audio_retry:" + (group.order() + 1) + ":" + number,
+        null,
+        false,
+        null);
+    UUID attempt = UUID.randomUUID();
+    long began = System.nanoTime();
+    var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
+    store.attempt(
+        job.id(),
+        new Attempt(
+            attempt,
+            "audio",
+            "group-" + group.order(),
+            profile.provider(),
+            profile.model(),
+            "attempting",
+            0,
+            Map.of(),
+            null,
+            false,
+            null,
+            number,
+            started,
+            null,
+            true,
+            "PENDING",
+            null,
+            null,
+            null));
+    AudioResult result;
+    try {
+      result = speech.render(group, job.id(), attempt);
+    } catch (Exception e) {
+      // An unexpected adapter/local exception is not evidence of a transient provider failure.
+      result = new AudioResult(new byte[0], "", Metadata.error("AUDIO_ADAPTER_FAILURE", false));
+    }
+    var metadata = result.metadata();
+    String error = metadata.errorCode();
+    String path = null;
+    try {
+      path = artifacts.preserve(job.id(), attempt, result.pcm(), result.transcript());
+    } catch (RuntimeException e) {
+      error = "AUDIO_ARTIFACT_WRITE_FAILURE";
+    }
+    AudioReceipt receipt = null;
+    if (error == null) {
       try {
-        result = speech.render(group, job.id(), attempt);
+        receipt = artifacts.validate(group, path, result.transcript());
       } catch (Exception e) {
-        // An unexpected adapter/local exception is not evidence of a transient provider failure.
-        result = new AudioResult(new byte[0], "", Metadata.error("AUDIO_ADAPTER_FAILURE", false));
-      }
-      var metadata = result.metadata();
-      String error = metadata.errorCode();
-      String path = null;
-      try {
-        path = artifacts.preserve(job.id(), attempt, result.pcm(), result.transcript());
-      } catch (RuntimeException e) {
-        error = "AUDIO_ARTIFACT_WRITE_FAILURE";
-      }
-      AudioReceipt receipt = null;
-      if (error == null) {
-        try {
-          receipt = artifacts.validate(group, path, result.transcript());
-        } catch (Exception e) {
-          error = "INVALID_AUDIO_WAVEFORM";
-        }
-      }
-      boolean transientFailure =
-          error != null
-              && error.equals(metadata.errorCode())
-              && AudioRetryPolicy.transientFailure(metadata);
-      Long delay =
-          transientFailure
-                  && number < AudioRetryPolicy.MAX_ATTEMPTS
-                  && !Thread.currentThread().isInterrupted()
-              ? audioRetry.delay(number, metadata)
-              : null;
-      store.attempt(
-          job.id(),
-          new Attempt(
-              attempt,
-              "audio",
-              "group-" + group.order(),
-              profile.provider(),
-              profile.model(),
-              error == null ? "succeeded" : "failed",
-              (System.nanoTime() - began) / 1000000,
-              metadata.usage(),
-              metadata.cost(),
-              transientFailure,
-              error,
-              number,
-              started,
-              java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC),
-              metadata.usage().isEmpty(),
-              error == null ? "SUCCESS" : transientFailure ? "TRANSIENT" : "NON_TRANSIENT",
-              metadata.providerStatus(),
-              metadata.providerCode(),
-              delay));
-      if (error == null) return receipt;
-      if (delay == null) {
-        store.state(job.id(), "failed", "audio", error, transientFailure, null);
-        return null;
-      }
-      store.state(
-          job.id(),
-          "running",
-          "audio_retry:" + (group.order() + 1) + ":" + (number + 1),
-          null,
-          false,
-          null);
-      try {
-        // No transaction spans the provider call or this wait.
-        audioRetry.pause(delay);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new IllegalStateException("PROCESS_INTERRUPTED");
+        error = "INVALID_AUDIO_WAVEFORM";
       }
     }
-    throw new IllegalStateException("AUDIO_ATTEMPT_LIMIT");
+    boolean transientFailure =
+        error != null
+            && error.equals(metadata.errorCode())
+            && AudioRetryPolicy.transientFailure(metadata);
+    String failureCode = error;
+    return new AudioRetryPolicy.Result<>(
+        receipt,
+        failureCode,
+        transientFailure,
+        metadata,
+        delay ->
+            store.attempt(
+                job.id(),
+                new Attempt(
+                    attempt,
+                    "audio",
+                    "group-" + group.order(),
+                    profile.provider(),
+                    profile.model(),
+                    failureCode == null ? "succeeded" : "failed",
+                    (System.nanoTime() - began) / 1000000,
+                    metadata.usage(),
+                    metadata.cost(),
+                    transientFailure,
+                    failureCode,
+                    number,
+                    started,
+                    java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC),
+                    metadata.usage().isEmpty(),
+                    failureCode == null ? "SUCCESS" : transientFailure ? "TRANSIENT" : "NON_TRANSIENT",
+                    metadata.providerStatus(),
+                    metadata.providerCode(),
+                    delay)));
   }
 
   private Segment renderDialogue(
@@ -297,113 +287,118 @@ public class GenerationService {
       List<Turn> previous,
       boolean last,
       String sourceLanguage) {
+    var number = new AtomicInteger();
+    var result =
+        audioRetry.execute(
+            "dialogue-segment",
+            () -> renderDialogueAttempt(
+                job, order, blocks, previous, last, sourceLanguage, number.incrementAndGet()));
+    if (result.errorCode() != null) {
+      store.state(job.id(), "failed", "dialogue", result.errorCode(), result.transientFailure(), null);
+      return null;
+    }
+    return result.value();
+  }
+
+  private AudioRetryPolicy.Result<Segment> renderDialogueAttempt(
+      Job job,
+      int order,
+      List<ChapterSource.Block> blocks,
+      List<Turn> previous,
+      boolean last,
+      String sourceLanguage,
+      int number) {
     var profile = text.profile();
-    for (int number = 1; number <= DialogueRetryPolicy.MAX_ATTEMPTS; number++) {
-      if (Thread.currentThread().isInterrupted())
-        throw new IllegalStateException("PROCESS_INTERRUPTED");
-      store.state(job.id(), "running", "dialogue", null, false, null);
-      UUID attempt = UUID.randomUUID();
-      long began = System.nanoTime();
-      var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
-      store.attempt(
-          job.id(),
-          new Attempt(
-              attempt,
-              "dialogue",
-              "segment-" + order,
-              profile.provider(),
-              profile.model(),
-              "attempting",
-              0,
-              Map.of(),
-              null,
-              false,
-              null,
-              number,
-              started,
-              null,
-              true,
-              "PENDING",
-              null,
-              null,
-              null));
-      TextResult result;
+    store.state(job.id(), "running", "dialogue", null, false, null);
+    UUID attempt = UUID.randomUUID();
+    long began = System.nanoTime();
+    var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
+    store.attempt(
+        job.id(),
+        new Attempt(
+            attempt,
+            "dialogue",
+            "segment-" + order,
+            profile.provider(),
+            profile.model(),
+            "attempting",
+            0,
+            Map.of(),
+            null,
+            false,
+            null,
+            number,
+            started,
+            null,
+            true,
+            "PENDING",
+            null,
+            null,
+            null));
+    TextResult result;
+    try {
+      result =
+          text.generate(
+              new TextRequest(
+                  job.id(),
+                  attempt,
+                  order,
+                  blocks,
+                  previous,
+                  order == 0,
+                  last,
+                  sourceLanguage,
+                  "fi"));
+    } catch (Exception e) {
+      // Unexpected local/adapter exceptions are not evidence of a transient provider failure.
+      result = new TextResult(null, Metadata.error("DIALOGUE_ADAPTER_FAILURE", false));
+    }
+    var metadata = result.metadata();
+    String error = metadata.errorCode();
+    Segment accepted = null;
+    if (error == null) {
       try {
-        result =
-            text.generate(
-                new TextRequest(
-                    job.id(),
-                    attempt,
-                    order,
-                    blocks,
-                    previous,
-                    order == 0,
-                    last,
-                    sourceLanguage,
-                    "fi"));
+        if (result.segment() == null) throw new IllegalArgumentException();
+        accepted = DialogueText.normalize(result.segment());
+        accepted.validate(order, blocks.stream().map(ChapterSource.Block::id).toList());
+      } catch (DialogueText.SpeakerMismatch e) {
+        error = "DIALOGUE_SPEAKER_PREFIX_MISMATCH";
       } catch (Exception e) {
-        // Unexpected local/adapter exceptions are not evidence of a transient provider failure.
-        result = new TextResult(null, Metadata.error("DIALOGUE_ADAPTER_FAILURE", false));
-      }
-      var metadata = result.metadata();
-      String error = metadata.errorCode();
-      Segment accepted = null;
-      if (error == null) {
-        try {
-          if (result.segment() == null) throw new IllegalArgumentException();
-          accepted = DialogueText.normalize(result.segment());
-          accepted.validate(order, blocks.stream().map(ChapterSource.Block::id).toList());
-        } catch (DialogueText.SpeakerMismatch e) {
-          error = "DIALOGUE_SPEAKER_PREFIX_MISMATCH";
-        } catch (Exception e) {
-          error = "INVALID_DIALOGUE_OUTPUT";
-        }
-      }
-      boolean transientFailure =
-          error != null
-              && error.equals(metadata.errorCode())
-              && DialogueRetryPolicy.transientFailure(metadata);
-      Long delay =
-          transientFailure
-                  && number < DialogueRetryPolicy.MAX_ATTEMPTS
-                  && !Thread.currentThread().isInterrupted()
-              ? audioRetry.delay(number, metadata)
-              : null;
-      store.attempt(
-          job.id(),
-          new Attempt(
-              attempt,
-              "dialogue",
-              "segment-" + order,
-              profile.provider(),
-              profile.model(),
-              error == null ? "succeeded" : "failed",
-              (System.nanoTime() - began) / 1000000,
-              metadata.usage(),
-              metadata.cost(),
-              transientFailure,
-              error,
-              number,
-              started,
-              java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC),
-              metadata.usage().isEmpty(),
-              error == null ? "SUCCESS" : transientFailure ? "TRANSIENT" : "NON_TRANSIENT",
-              metadata.providerStatus(),
-              metadata.providerCode(),
-              delay));
-      if (error == null) return accepted;
-      if (delay == null) {
-        store.state(job.id(), "failed", "dialogue", error, transientFailure, null);
-        return null;
-      }
-      try {
-        // Reuse existing 2s/8s + jitter / Retry-After timing; no transaction spans this wait.
-        audioRetry.pause(delay);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        throw new IllegalStateException("PROCESS_INTERRUPTED");
+        error = "INVALID_DIALOGUE_OUTPUT";
       }
     }
-    throw new IllegalStateException("DIALOGUE_ATTEMPT_LIMIT");
+    boolean transientFailure =
+        error != null
+            && error.equals(metadata.errorCode())
+            && DialogueRetryPolicy.transientFailure(metadata);
+    String failureCode = error;
+    return new AudioRetryPolicy.Result<>(
+        accepted,
+        failureCode,
+        transientFailure,
+        metadata,
+        delay ->
+            store.attempt(
+                job.id(),
+                new Attempt(
+                    attempt,
+                    "dialogue",
+                    "segment-" + order,
+                    profile.provider(),
+                    profile.model(),
+                    failureCode == null ? "succeeded" : "failed",
+                    (System.nanoTime() - began) / 1000000,
+                    metadata.usage(),
+                    metadata.cost(),
+                    transientFailure,
+                    failureCode,
+                    number,
+                    started,
+                    java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC),
+                    metadata.usage().isEmpty(),
+                    failureCode == null ? "SUCCESS" : transientFailure ? "TRANSIENT" : "NON_TRANSIENT",
+                    metadata.providerStatus(),
+                    metadata.providerCode(),
+                    delay)));
   }
 }

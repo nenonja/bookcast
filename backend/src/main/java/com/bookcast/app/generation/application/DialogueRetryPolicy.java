@@ -5,8 +5,6 @@ import java.util.Set;
 
 /** Dialogue retries share the existing backoff timing, but not audio-specific classifications. */
 public final class DialogueRetryPolicy {
-  public static final int MAX_ATTEMPTS = 3;
-
   private DialogueRetryPolicy() {}
 
   public static boolean transientFailure(Metadata metadata) {

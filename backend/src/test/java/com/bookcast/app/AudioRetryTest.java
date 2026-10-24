@@ -19,7 +19,7 @@ class AudioRetryTest {
     final TextGeneration text = mock(TextGeneration.class);
     final SpeechRendering speech = mock(SpeechRendering.class);
     final AudioArtifacts artifacts = mock(AudioArtifacts.class);
-    final AudioRetryPolicy.Timing timing = mock(AudioRetryPolicy.Timing.class);
+    boolean interruptBeforeRetry;
     final List<AudioReceipt> receipts = new ArrayList<>();
     final Map<UUID, Attempt> attempts = new LinkedHashMap<>();
     final List<String> stages = new ArrayList<>();
@@ -73,6 +73,8 @@ class AudioRetryTest {
               i -> {
                 var a = (Attempt) i.getArgument(1);
                 attempts.put(a.id(), a);
+                if (interruptBeforeRetry && a.nextRetryDelayMs() != null)
+                  Thread.currentThread().interrupt();
                 return null;
               })
           .when(store)
@@ -116,7 +118,7 @@ class AudioRetryTest {
               speech,
               artifacts,
               800,
-              new AudioRetryPolicy(timing, 2000, 8000, 60000, .2));
+              new AudioRetryPolicy(attempt -> 0L));
     }
 
     static AudioReceipt receipt(Group group) {
@@ -158,7 +160,6 @@ class AudioRetryTest {
     assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(Attempt::outcome).toList());
     assertEquals(List.of(1, 2), f.saved().stream().map(Attempt::attemptNumber).toList());
     verify(f.store, times(1)).audio(any(), any());
-    verify(f.timing).pause(2000);
     assertTrue(f.stages.contains("audio_retry:2:2"));
     assertTrue(f.saved().stream().allMatch(a -> a.startedAt() != null && a.endedAt() != null));
     assertTrue(f.saved().getFirst().usageUnknown());
@@ -173,8 +174,6 @@ class AudioRetryTest {
     f.service.workOne();
     f.calls(3);
     assertEquals(Status.succeeded, f.job.status());
-    verify(f.timing).pause(2000);
-    verify(f.timing).pause(8000);
   }
 
   @Test
@@ -186,7 +185,6 @@ class AudioRetryTest {
     assertEquals(Status.failed, f.job.status());
     assertEquals(1, f.receipts.size());
     assertNull(f.saved().getLast().nextRetryDelayMs());
-    verify(f.timing, times(2)).pause(anyLong());
   }
 
   @Test
@@ -197,7 +195,6 @@ class AudioRetryTest {
     f.service.workOne();
     f.calls(1);
     assertEquals(Status.failed, f.job.status());
-    verify(f.timing, never()).pause(anyLong());
   }
 
   @Test
@@ -211,14 +208,58 @@ class AudioRetryTest {
             true,
             429,
             "rate_limit_exceeded",
-            12000L),
+            12L),
         success());
     f.service.workOne();
     f.calls(2);
-    verify(f.timing).pause(12000);
-    assertEquals(12000L, f.saved().getFirst().nextRetryDelayMs());
+    assertEquals(12L, f.saved().getFirst().nextRetryDelayMs());
     assertEquals(429, f.saved().getFirst().providerStatus());
     assertEquals(.015, f.saved().stream().mapToDouble(Attempt::estimatedCost).sum(), 1e-9);
+  }
+
+  @Test
+  void retryAfterAboveWaitLimitDefersWithoutDiscardingUsageOrCheckpoints() throws Exception {
+    var f = new Fixture();
+    f.results(
+        new Metadata(
+            Map.of("inputTokens", 5L),
+            .005,
+            "PROVIDER_HTTP_429",
+            true,
+            429,
+            "rate_limit_exceeded",
+            120000L));
+    f.service.workOne();
+    f.calls(1);
+    assertEquals(Status.failed, f.job.status());
+    assertEquals("PROVIDER_HTTP_429", f.job.errorCode());
+    assertTrue(f.job.retryable());
+    assertEquals(1, f.receipts.size());
+    assertEquals(.005, f.saved().getFirst().estimatedCost());
+    assertEquals(Map.of("inputTokens", 5L), f.saved().getFirst().usage());
+    assertNull(f.saved().getFirst().nextRetryDelayMs());
+    f.service.retry(f.job.id());
+    f.results(success());
+    f.service.workOne();
+    f.calls(2);
+    assertEquals(Status.succeeded, f.job.status());
+    verify(f.speech, never()).render(eq(f.groups.getFirst()), any(), any());
+  }
+
+  @Test
+  void eachMissingAudioGroupHasItsOwnThreeAttemptLimit() {
+    var f = new Fixture();
+    f.receipts.clear();
+    f.results(timeout(), timeout(), success(), timeout(), timeout(), success());
+    f.service.workOne();
+    assertEquals(Status.succeeded, f.job.status());
+    assertEquals(2, f.receipts.size());
+    assertEquals(6, f.saved().size());
+    assertEquals(
+        List.of(1, 2, 3, 1, 2, 3),
+        f.saved().stream().map(Attempt::attemptNumber).toList());
+    for (Group group : f.groups)
+      verify(f.speech, times(3)).render(eq(group), eq(f.job.id()), any());
   }
 
   @Test
@@ -235,14 +276,14 @@ class AudioRetryTest {
   void interruptedBackoffRequiresExplicitResumeAndKeepsEarlierCheckpoints() throws Exception {
     var f = new Fixture();
     f.results(timeout());
-    doThrow(new InterruptedException()).when(f.timing).pause(anyLong());
+    f.interruptBeforeRetry = true;
     f.service.workOne();
     Thread.interrupted();
     assertEquals(Status.failed, f.job.status());
     assertEquals("PROCESS_INTERRUPTED", f.job.errorCode());
     assertEquals(1, f.receipts.size());
     f.calls(1);
-    reset(f.timing);
+    f.interruptBeforeRetry = false;
     f.service.retry(f.job.id());
     f.results(success());
     f.service.workOne();
@@ -261,7 +302,6 @@ class AudioRetryTest {
     assertEquals(Status.succeeded, f.job.status());
     assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(Attempt::outcome).toList());
     verify(f.store, times(1)).audio(any(), any());
-    verify(f.timing).pause(2000);
   }
 
   @Test
@@ -274,7 +314,6 @@ class AudioRetryTest {
     assertEquals(Status.failed, f.job.status());
     assertEquals("UNEXPECTED_AUDIO_STRUCTURE", f.job.errorCode());
     assertEquals(1, f.receipts.size());
-    verify(f.timing, times(2)).pause(anyLong());
   }
 
   @Test
@@ -284,7 +323,6 @@ class AudioRetryTest {
     f.service.workOne();
     f.calls(1);
     assertEquals(Status.failed, f.job.status());
-    verify(f.timing, never()).pause(anyLong());
   }
 
   @Test
@@ -299,20 +337,23 @@ class AudioRetryTest {
     assertEquals("AUDIO_ARTIFACT_WRITE_FAILURE", f.saved().getFirst().errorCode());
     assertEquals(.01, f.saved().getFirst().estimatedCost());
     assertNotNull(f.saved().getFirst().endedAt());
-    verify(f.timing, never()).pause(anyLong());
   }
 
   @Test
-  void jitterAndRetryAfterAreBoundedAndClassificationIsExplicit() {
-    var timing = mock(AudioRetryPolicy.Timing.class);
-    when(timing.jitter()).thenReturn(1.0);
-    var policy = new AudioRetryPolicy(timing, 2000, 8000, 60000, .2);
-    assertEquals(2400, policy.delay(1, timeout()));
-    assertEquals(9600, policy.delay(2, timeout()));
-    assertEquals(
-        60000,
-        policy.delay(
-            1, new Metadata(Map.of(), null, "PROVIDER_HTTP_429", true, 429, null, 999999L)));
+  void failedAttemptRecordingStopsBeforeAnotherPaidAttempt() {
+    var f = new Fixture();
+    f.results(timeout(), success());
+    doThrow(new IllegalStateException("ATTEMPT_WRITE_FAILURE"))
+        .when(f.store).attempt(any(), argThat(a -> a.outcome().equals("failed")));
+    f.service.workOne();
+    f.calls(1);
+    assertEquals(Status.failed, f.job.status());
+    assertEquals("ATTEMPT_WRITE_FAILURE", f.job.errorCode());
+    assertEquals(1, f.receipts.size());
+  }
+
+  @Test
+  void retryClassificationIsExplicit() {
     for (int status : List.of(400, 401, 403, 404, 422, 501))
       assertFalse(
           AudioRetryPolicy.transientFailure(

@@ -92,14 +92,13 @@ class DialogueRetryTest {
         f.dialogueAttempts().stream().map(Attempt::outcome).toList());
     assertEquals(List.of(1, 2), f.dialogueAttempts().stream().map(Attempt::attemptNumber).toList());
     verify(f.store, times(1)).segment(any(), any());
-    verify(f.timing).pause(2000);
     var failed = f.dialogueAttempts().getFirst();
     assertTrue(failed.usageUnknown());
     assertNull(failed.estimatedCost());
     assertNotNull(failed.startedAt());
     assertNotNull(failed.endedAt());
     assertEquals("TRANSIENT", failed.retryClassification());
-    assertEquals(2000L, failed.nextRetryDelayMs());
+    assertEquals(0L, failed.nextRetryDelayMs());
     assertFalse(f.dialogueAttempts().getLast().usageUnknown());
     assertEquals(.01, f.dialogueAttempts().getLast().estimatedCost());
   }
@@ -111,8 +110,6 @@ class DialogueRetryTest {
     f.service.workOne();
     f.textCalls(3);
     assertEquals(Status.succeeded, f.job.status());
-    verify(f.timing).pause(2000);
-    verify(f.timing).pause(8000);
     assertEquals(1, f.segments.size());
   }
 
@@ -127,7 +124,6 @@ class DialogueRetryTest {
     assertNull(f.dialogueAttempts().getLast().nextRetryDelayMs());
     assertTrue(f.segments.isEmpty());
     verify(f.speech, never()).render(any(), any(), any());
-    verify(f.timing, times(2)).pause(anyLong());
   }
 
   @Test
@@ -144,7 +140,6 @@ class DialogueRetryTest {
       f.service.workOne();
       f.textCalls(1);
       assertEquals(Status.failed, f.job.status());
-      verify(f.timing, never()).pause(anyLong());
     }
   }
 
@@ -159,11 +154,10 @@ class DialogueRetryTest {
             true,
             429,
             "rate_limit_exceeded",
-            12000L),
+            12L),
         AudioRetryTest.success());
     f.service.workOne();
     f.textCalls(2);
-    verify(f.timing).pause(12000);
     var failed = f.dialogueAttempts().getFirst();
     assertEquals(429, failed.providerStatus());
     assertEquals("rate_limit_exceeded", failed.providerCode());
@@ -171,6 +165,36 @@ class DialogueRetryTest {
     assertFalse(failed.usageUnknown());
     assertEquals(
         .015, f.dialogueAttempts().stream().mapToDouble(a -> a.estimatedCost()).sum(), .000001);
+  }
+
+  @Test
+  void longRetryAfterDefersMissingDialogueAndPreservesExistingSegment() throws Exception {
+    var f = new Fixture(true);
+    f.textResults(
+        new Metadata(
+            Map.of("inputTokens", 50L),
+            .005,
+            "PROVIDER_HTTP_429",
+            true,
+            429,
+            "rate_limit_exceeded",
+            120000L));
+    f.service.workOne();
+    f.textCalls(1);
+    assertEquals(Status.failed, f.job.status());
+    assertEquals("PROVIDER_HTTP_429", f.job.errorCode());
+    assertTrue(f.job.retryable());
+    assertEquals(1, f.segments.size());
+    assertEquals(.005, f.dialogueAttempts().getFirst().estimatedCost());
+    assertNull(f.dialogueAttempts().getFirst().nextRetryDelayMs());
+    verify(f.text, never()).generate(argThat(r -> r.order() == 0));
+    f.service.retry(f.job.id());
+    f.textResults(AudioRetryTest.success());
+    f.service.workOne();
+    f.textCalls(2);
+    assertEquals(Status.succeeded, f.job.status());
+    assertEquals(2, f.segments.size());
+    verify(f.text, never()).generate(argThat(r -> r.order() == 0));
   }
 
   @Test
@@ -197,7 +221,7 @@ class DialogueRetryTest {
   void interruptedBackoffNeedsManualResumeAndKeepsCheckpoints() throws Exception {
     var f = new Fixture(true);
     f.textResults(AudioRetryTest.timeout());
-    doThrow(new InterruptedException()).when(f.timing).pause(anyLong());
+    f.interruptBeforeRetry = true;
     try {
       f.service.workOne();
     } finally {
@@ -209,7 +233,7 @@ class DialogueRetryTest {
     f.service.interrupted();
     verify(f.store).interrupted();
     f.textCalls(1);
-    reset(f.timing);
+    f.interruptBeforeRetry = false;
     f.service.retry(f.job.id());
     f.textResults(AudioRetryTest.success());
     f.service.workOne();
@@ -226,7 +250,6 @@ class DialogueRetryTest {
     f.service.workOne();
     f.textCalls(1);
     assertEquals("DIALOGUE_ADAPTER_FAILURE", f.job.errorCode());
-    verify(f.timing, never()).pause(anyLong());
     var g = new Fixture(false);
     when(g.text.generate(any()))
         .thenReturn(
@@ -236,7 +259,7 @@ class DialogueRetryTest {
     g.service.workOne();
     g.textCalls(1);
     assertEquals("INVALID_DIALOGUE_OUTPUT", g.job.errorCode());
-    verify(g.timing, never()).pause(anyLong());
+    verify(g.store, never()).segment(any(), any());
   }
 
   @Test
