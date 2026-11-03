@@ -19,10 +19,46 @@ import java.util.*;
  *
  * <p>The speech adapter owns transport, session-configuration checks, payload preservation and the
  * retryability decision. This collector neither writes artifacts nor retries provider calls. Its
- * observation, validation and snapshot operations are synchronized, but there is no reset or terminal
- * state preventing further observations; the caller controls the response lifecycle.
+ * observation, validation and snapshot operations are synchronized. The caller controls normal
+ * completion; exhausting a resource budget latches a non-retryable failure and rejects all further
+ * observations. Diagnostics remain bounded and retain the previously collected evidence.
  */
 final class RealtimeAudioStructure {
+  static final int MAX_EVENTS = 8192;
+  static final int MAX_STRUCTURAL_ENTRIES = 1024;
+
+  /** Safe, provider-local signal; its resource name is supplied by Bookcast, never provider text. */
+  static final class ResourceLimit extends RuntimeException {
+    static final String CODE = "PROVIDER_RESOURCE_LIMIT";
+    final String resource;
+
+    ResourceLimit(String resource) {
+      super(CODE);
+      this.resource = resource;
+    }
+  }
+
+  private final int maxEvents, maxStructuralEntries;
+  private int eventCount, structuralEntries;
+  private String resourceLimit;
+
+  RealtimeAudioStructure() {
+    this(MAX_EVENTS, MAX_STRUCTURAL_ENTRIES);
+  }
+
+  /**
+   * Bounds observations and cumulative structural allocations. Distinct map/set entries, item
+   * summaries, final output slots and content parts consume the shared entry budget. Repeated item
+   * definitions consume new summary/part entries even when replacing an earlier map value.
+   * Defaults leave substantial headroom over saved attempts (614 events and at most two items).
+   */
+  RealtimeAudioStructure(int maxEvents, int maxStructuralEntries) {
+    if (maxEvents < 1 || maxStructuralEntries < 1)
+      throw new IllegalArgumentException("INVALID_REALTIME_LIMITS");
+    this.maxEvents = maxEvents;
+    this.maxStructuralEntries = maxStructuralEntries;
+  }
+
   /**
    * Payload-free summary of an output item in a streaming event or the final response.
    *
@@ -93,10 +129,17 @@ final class RealtimeAudioStructure {
    * @param event non-null parsed provider event; payload fields are not retained
    * @return a new mutable map of selected structural fields, including {@code null} for missing or
    *     invalid tokens; changing the map does not change this collector
+   * @throws ResourceLimit before exceeding the event or shared structural-entry budget; subsequent
+   *     observations also fail and validation cannot report success
    */
   synchronized Map<String, Object> observe(JsonNode event) {
+    if (resourceLimit != null) throw new ResourceLimit(resourceLimit);
+    if (eventCount >= maxEvents) limit("structural_events");
+    eventCount++;
     String type = token(event.path("type"));
-    events.merge(type == null ? "INVALID_EVENT_TYPE" : type, 1L, Long::sum);
+    String counter = type == null ? "INVALID_EVENT_TYPE" : type;
+    if (!events.containsKey(counter)) reserveEntries(1);
+    events.merge(counter, 1L, Long::sum);
     var safe = new LinkedHashMap<String, Object>();
     safe.put("eventType", type);
     safe.put("responseId", token(event.path("response_id")));
@@ -114,7 +157,7 @@ final class RealtimeAudioStructure {
       String id = token(event.path("response").path("id"));
       if (id == null) malformedCorrelation = true;
       else {
-        responseIds.add(id);
+        retain(responseIds, id);
         if (responseId == null) responseId = id;
       }
       safe.put("responseId", id);
@@ -122,40 +165,40 @@ final class RealtimeAudioStructure {
     if (type.equals("response.output_item.added") || type.equals("response.output_item.done")) {
       int outputIndex = index(event.path("output_index"));
       var item = item(event.path("item"), outputIndex);
-      Item previous = observedItems.put(outputIndex, item);
+      Item previous = retain(observedItems, outputIndex, item);
       if (previous != null
           && (!Objects.equals(previous.id(), item.id())
               || !Objects.equals(previous.type(), item.type())
               || !Objects.equals(previous.role(), item.role()))) malformedCorrelation = true;
-      if (type.equals("response.output_item.done")) completedItems.put(outputIndex, item);
+      if (type.equals("response.output_item.done")) retain(completedItems, outputIndex, item);
       if (item.contentPartTypes().contains("output_audio") && item.id() != null)
-        observedAudioItems.add(item.id());
+        retain(observedAudioItems, item.id());
       inspectType(item.type());
       safe.put("item", item);
       String id = token(event.path("response_id"));
       if (id == null || outputIndex < 0) malformedCorrelation = true;
-      else responseIds.add(id);
+      else retain(responseIds, id);
     }
     if (type.equals("response.output_audio.delta") || type.equals("response.output_audio.done")) {
-      audioCoordinates.add(coordinate(event));
+      retain(audioCoordinates, coordinate(event));
       if (type.endsWith(".delta")) addId(audioIds, event.path("item_id"));
     }
     if (type.equals("response.output_audio_transcript.delta")
         || type.equals("response.output_audio_transcript.done")) {
-      transcriptCoordinates.add(coordinate(event));
+      retain(transcriptCoordinates, coordinate(event));
       if (type.endsWith(".delta")) addId(transcriptIds, event.path("item_id"));
     }
-    if (type.startsWith("response.output_text.")) otherCoordinates.add(coordinate(event));
+    if (type.startsWith("response.output_text.")) retain(otherCoordinates, coordinate(event));
     if (type.equals("response.content_part.added") || type.equals("response.content_part.done")) {
       var coordinate = coordinate(event);
       String part = token(event.path("part").path("type"));
       safe.put("contentPartType", part);
       // Streaming part types differ from the final message content schema.
-      if ("audio".equals(part)) audioCoordinates.add(coordinate);
-      else if ("text".equals(part)) otherCoordinates.add(coordinate);
+      if ("audio".equals(part)) retain(audioCoordinates, coordinate);
+      else if ("text".equals(part)) retain(otherCoordinates, coordinate);
       else {
         unknownSchema = true;
-        unexpectedTypes.add(part == null ? "MISSING_CONTENT_TYPE" : part);
+        retain(unexpectedTypes, part == null ? "MISSING_CONTENT_TYPE" : part);
       }
     }
     if (type.equals("response.done")) {
@@ -163,11 +206,12 @@ final class RealtimeAudioStructure {
       responseId = token(response.path("id"));
       finalStatus = token(response.path("status"));
       if (responseId == null) malformedCorrelation = true;
-      else responseIds.add(responseId);
+      else retain(responseIds, responseId);
       var output = response.path("output");
       if (!output.isArray()) unknownSchema = true;
       else {
         outputCount = output.size();
+        reserveEntries(output.size());
         var summaries = new ArrayList<Item>();
         for (int i = 0; i < output.size(); i++) {
           var item = item(output.get(i), i);
@@ -193,7 +237,8 @@ final class RealtimeAudioStructure {
   /**
    * Evaluates the evidence collected so far and stores the result for subsequent snapshots.
    *
-   * <p>Unsupported schemas take precedence over an incomplete final status, which takes precedence
+   * <p>Resource exhaustion takes precedence over all protocol classifications. Otherwise unsupported
+   * schemas take precedence over an incomplete final status, which takes precedence
    * over correlation and output-shape failures. Both audio and transcript delta item IDs are
    * required. Separate {@code .done} events and streaming item events are not required, but their
    * recorded evidence is checked when present. Text output, actionable items, duplicate final item
@@ -205,7 +250,7 @@ final class RealtimeAudioStructure {
    *
    * @return {@code null} if the collected structure passes, otherwise
    *     {@code PROVIDER_SCHEMA_UNSUPPORTED}, {@code INCOMPLETE_AUDIO} or
-   *     {@code UNEXPECTED_AUDIO_STRUCTURE}
+   *     {@code UNEXPECTED_AUDIO_STRUCTURE} or {@code PROVIDER_RESOURCE_LIMIT}
    */
   synchronized String validate() {
     validationCode = validateShape();
@@ -213,6 +258,7 @@ final class RealtimeAudioStructure {
   }
 
   private String validateShape() {
+    if (resourceLimit != null) return ResourceLimit.CODE;
     if (unknownSchema) return "PROVIDER_SCHEMA_UNSUPPORTED";
     if (!"completed".equals(finalStatus)) return "INCOMPLETE_AUDIO";
     if (actionable
@@ -294,6 +340,9 @@ final class RealtimeAudioStructure {
     safe.put("unexpectedItemTypes", List.copyOf(unexpectedTypes));
     safe.put("providerEventCounts", Map.copyOf(events));
     safe.put("validationCode", validationCode);
+    safe.put("observedEventCount", eventCount);
+    safe.put("structuralEntries", structuralEntries);
+    safe.put("resourceLimit", resourceLimit);
     return safe;
   }
 
@@ -307,7 +356,7 @@ final class RealtimeAudioStructure {
     if (c.responseId() == null || c.itemId() == null || c.outputIndex() < 0 || c.contentIndex() < 0)
       malformedCorrelation = true;
     if (c.responseId() != null) {
-      responseIds.add(c.responseId());
+      retain(responseIds, c.responseId());
       if (responseId == null) responseId = c.responseId();
     }
     return c;
@@ -315,10 +364,12 @@ final class RealtimeAudioStructure {
 
   private void addId(Set<String> ids, JsonNode node) {
     String id = token(node);
-    if (id != null) ids.add(id);
+    if (id != null) retain(ids, id);
   }
 
   private Item item(JsonNode node, int index) {
+    reserveEntries(1);
+    if (node.path("content").isArray()) reserveEntries(node.path("content").size());
     var parts = new ArrayList<String>();
     if (!node.isObject() || !node.path("content").isArray()) {
       if ("message".equals(token(node.path("type")))) malformedCorrelation = true;
@@ -327,7 +378,7 @@ final class RealtimeAudioStructure {
         String type = token(part.path("type"));
         parts.add(type == null ? "MISSING_CONTENT_TYPE" : type);
         if (!Set.of("output_audio", "output_text").contains(Objects.toString(type, ""))) {
-          unexpectedTypes.add(type == null ? "MISSING_CONTENT_TYPE" : type);
+          retain(unexpectedTypes, type == null ? "MISSING_CONTENT_TYPE" : type);
           unknownSchema = true;
         }
       }
@@ -343,11 +394,32 @@ final class RealtimeAudioStructure {
   private void inspectType(String type) {
     if (ACTIONABLE.contains(Objects.toString(type, ""))) {
       actionable = true;
-      unexpectedTypes.add(type);
+      retain(unexpectedTypes, type);
     } else if (!"message".equals(type)) {
       unknownSchema = true;
-      unexpectedTypes.add(type == null ? "MISSING_ITEM_TYPE" : type);
+      retain(unexpectedTypes, type == null ? "MISSING_ITEM_TYPE" : type);
     }
+  }
+
+  private <T> void retain(Set<T> values, T value) {
+    if (!values.contains(value)) reserveEntries(1);
+    values.add(value);
+  }
+
+  private <K, V> V retain(Map<K, V> values, K key, V value) {
+    if (!values.containsKey(key)) reserveEntries(1);
+    return values.put(key, value);
+  }
+
+  private void reserveEntries(int count) {
+    if (count > maxStructuralEntries - structuralEntries) limit("structural_entries");
+    structuralEntries += count;
+  }
+
+  private void limit(String resource) {
+    resourceLimit = resource;
+    validationCode = ResourceLimit.CODE;
+    throw new ResourceLimit(resource);
   }
 
   private static String token(JsonNode value) {

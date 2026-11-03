@@ -353,6 +353,23 @@ class AudioRetryTest {
   }
 
   @Test
+  void resourceLimitFailureIsNotRetriedOrAcceptedAsAnAudioCheckpoint() {
+    var f = new Fixture();
+    f.results(new Metadata(Map.of("outputTokens", 10L), .01, "PROVIDER_RESOURCE_LIMIT", false));
+    f.service.workOne();
+    f.calls(1);
+    assertEquals(Status.failed, f.job.status());
+    assertEquals("PROVIDER_RESOURCE_LIMIT", f.job.errorCode());
+    assertFalse(f.job.retryable());
+    assertEquals(1, f.receipts.size(), "the earlier checkpoint is preserved");
+    verify(f.store, never()).audio(any(), any());
+    verify(f.artifacts, never()).validate(any(), any(), any());
+    assertEquals(.01, f.saved().getFirst().estimatedCost());
+    assertEquals(Map.of("outputTokens", 10L), f.saved().getFirst().usage());
+    assertNull(f.saved().getFirst().nextRetryDelayMs());
+  }
+
+  @Test
   void retryClassificationIsExplicit() {
     for (int status : List.of(400, 401, 403, 404, 422, 501))
       assertFalse(

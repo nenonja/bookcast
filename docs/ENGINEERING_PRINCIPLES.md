@@ -194,3 +194,12 @@ Examples:
 The goal is not to make one agent session succeed.
 
 The goal is to make future sessions less likely to fail.
+
+## 13. Prefer established solutions over custom infrastructure
+
+Prefer mature, well-maintained libraries and framework capabilities for common technical problems instead of implementing them from scratch.
+Before introducing custom infrastructure, check whether the existing technology stack already provides a suitable solution.
+Keep custom code focused on Bookcast-specific domain rules, invariants and workflows.
+Evaluate the total complexity of a dependency, including configuration, integration, maintenance and testing.
+Do not introduce libraries merely to replace a few simple lines of code.
+When custom implementation is necessary, document the reason and keep it minimal and testable.
