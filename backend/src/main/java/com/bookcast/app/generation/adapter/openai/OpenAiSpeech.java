@@ -9,18 +9,21 @@ import com.fasterxml.jackson.databind.*;
 import java.io.*;
 import java.net.*;
 import java.net.http.*;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 import static java.nio.file.Files.*;
 /**
  * Renders one prepared same-speaker group through an isolated OpenAI Realtime WebSocket session.
  *
- * <p>Requests Finnish delivery of the supplied script text, with HOST voice {@code marin}, EXPERT
- * voice {@code ash}, speed {@code 0.95} and 24,000 Hz PCM output. Each call configures a new session
+ * <p>Requests Finnish delivery of the supplied script text with configured voices and speed
+ * (defaults: HOST {@code marin}, EXPERT {@code ash}, speed {@code 0.95}) and 24,000 Hz PCM output.
+ * Each call configures a new session
  * and requests a response outside conversation history, with tools disabled. These instructions
  * request faithful speech; they do not prove that every supplied word was spoken.
  *
@@ -31,6 +34,7 @@ import static java.nio.file.Files.*;
  */
 @Component
 @ConditionalOnProperty(name = "bookcast.ai-mode", havingValue = "openai", matchIfMissing = true)
+@EnableConfigurationProperties(OpenAiSpeechSettings.class)
 public class OpenAiSpeech implements SpeechRendering {
   /**
    * Per-attempt budgets; character limits count UTF-16 code units, audio limits count PCM bytes.
@@ -63,6 +67,7 @@ public class OpenAiSpeech implements SpeechRendering {
   private final Limits limits;
   private final String key;
   private final String model;
+  private final OpenAiSpeechSettings settings;
   private final HttpClient http =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build();
   private static final String INSTRUCTIONS =
@@ -73,15 +78,27 @@ public class OpenAiSpeech implements SpeechRendering {
       ObjectMapper json,
       @Value("${bookcast.api-key:}") String key,
       @Value("${bookcast.data-dir:./data}") String dataDir,
-      @Value("${bookcast.audio-model:gpt-realtime-2.1-mini}") String model) {
-    this(json, key, dataDir, model, Limits.DEFAULT);
+      @Value("${bookcast.audio-model:gpt-realtime-2.1-mini}") String model,
+      OpenAiSpeechSettings settings) {
+    this(json, key, dataDir, model, settings, Limits.DEFAULT);
+  }
+
+  public OpenAiSpeech(ObjectMapper json, String key, String dataDir, String model) {
+    this(json, key, dataDir, model, OpenAiSpeechSettings.DEFAULT);
   }
 
   OpenAiSpeech(ObjectMapper json, String key, String dataDir, String model, Limits limits) {
+    this(json, key, dataDir, model, OpenAiSpeechSettings.DEFAULT, limits);
+  }
+
+  OpenAiSpeech(ObjectMapper json, String key, String dataDir, String model,
+      OpenAiSpeechSettings settings, Limits limits) {
+    if (model == null || model.isBlank()) throw new IllegalArgumentException("INVALID_AUDIO_MODEL");
     this.root = java.nio.file.Path.of(dataDir);
     this.json = json;
     this.key = key;
     this.model = model;
+    this.settings = Objects.requireNonNull(settings);
     this.limits = limits;
     eventJson = json.getFactory().copy();
     eventJson.setStreamReadConstraints(StreamReadConstraints.builder()
@@ -96,6 +113,73 @@ public class OpenAiSpeech implements SpeechRendering {
 
   public Profile profile() {
     return new Profile("openai", model);
+  }
+
+  /**
+   * Creates an exclusive, immutable speech-settings.json per generation, or rejects a mismatch with
+   * SPEECH_CONFIGURATION_CHANGED before any paid work. Legacy generations can adopt the historical
+   * default voices/speed only after all existing attempt configurations agree with model, selected
+   * voice and speed. Verified legacy differences use SPEECH_CONFIGURATION_MISMATCH; missing or
+   * malformed evidence is rejected as SPEECH_CONFIGURATION_UNVERIFIED.
+   * No existing attempt/configuration file is rewritten. Synchronization matches the supported
+   * single-backend deployment and prevents start/worker races while publishing the small snapshot.
+   *
+   * @param generationId non-null ID whose private generation directory holds the snapshot
+   * @throws IllegalStateException if settings changed, legacy evidence cannot establish compatibility,
+   *     or the snapshot cannot be read/created; no provider request has been made
+   */
+  @Override
+  public synchronized void prepareGeneration(UUID generationId) {
+    Path folder = root.resolve(generationId.toString());
+    Path snapshot = folder.resolve("speech-settings.json");
+    JsonNode expected = json.valueToTree(Map.of(
+        "model", model, "hostVoice", settings.hostVoice(),
+        "expertVoice", settings.expertVoice(), "speed", settings.speed()));
+    try {
+      if (exists(snapshot)) {
+        JsonNode saved = json.readTree(readString(snapshot));
+        if (saved == null || !saved.isObject())
+          throw new IllegalStateException("SPEECH_CONFIGURATION_UNVERIFIED");
+        if (!expected.equals(saved))
+          throw new IllegalStateException("SPEECH_CONFIGURATION_CHANGED");
+        return;
+      }
+      if (exists(folder)) verifyLegacySettings(folder);
+      createDirectories(folder);
+      writeString(snapshot, json.writeValueAsString(expected),
+          java.nio.file.StandardOpenOption.CREATE_NEW);
+    } catch (IOException e) {
+      throw new IllegalStateException("SPEECH_CONFIGURATION_UNVERIFIED");
+    }
+  }
+
+  private void verifyLegacySettings(Path folder) throws IOException {
+    boolean mismatch = false;
+    try (var paths = list(folder)) {
+      for (Path attempt : paths.filter(java.nio.file.Files::isDirectory).toList()) {
+        Path config = attempt.resolve("render-config.json");
+        if (!exists(config)) {
+          if (exists(attempt.resolve("stream.pcm")) || exists(attempt.resolve("raw.pcm")))
+            throw new IllegalStateException("SPEECH_CONFIGURATION_UNVERIFIED");
+          continue;
+        }
+        JsonNode saved = json.readTree(readString(config));
+        if (saved == null || !saved.isObject())
+          throw new IllegalStateException("SPEECH_CONFIGURATION_UNVERIFIED");
+        String role = saved.path("group").path("speaker").asText();
+        if (!Set.of("HOST", "EXPERT").contains(role) || !saved.path("speed").isNumber()
+            || !Double.isFinite(saved.path("speed").asDouble())
+            || !saved.path("voice").isTextual() || !saved.path("model").isTextual())
+          throw new IllegalStateException("SPEECH_CONFIGURATION_UNVERIFIED");
+        if (!model.equals(saved.path("model").asText())
+            || !settings.voice(Speaker.valueOf(role)).equals(saved.path("voice").asText())
+            || saved.path("speed").asDouble() != settings.speed())
+          mismatch = true;
+      }
+    }
+    if (mismatch) throw new IllegalStateException("SPEECH_CONFIGURATION_MISMATCH");
+    if (!settings.equals(OpenAiSpeechSettings.DEFAULT))
+      throw new IllegalStateException("SPEECH_CONFIGURATION_UNVERIFIED");
   }
 
   /**
@@ -130,9 +214,11 @@ public class OpenAiSpeech implements SpeechRendering {
    * @return received PCM bytes requested at 24,000 Hz, concatenated transcript deltas and metadata;
    *     bytes/text may be empty or partial, and unknown cost is {@code null}
    * @throws IllegalStateException with {@code RAW_ATTEMPT_WRITE_FAILURE} if initial attempt files
-   *     cannot be created; initialization happens before transport exception handling
+   *     cannot be created, or a speech-configuration error from {@link #prepareGeneration(UUID)};
+   *     these checks happen before transport exception handling
    */
   public AudioResult render(Group g, UUID job, UUID attempt) {
+    prepareGeneration(job);
     Listener listener = new Listener(g, job, attempt);
     CompletableFuture<WebSocket> connection = null;
     try {
@@ -213,9 +299,9 @@ public class OpenAiSpeech implements SpeechRendering {
                     "model",
                     profile().model(),
                     "voice",
-                    g.speaker() == Speaker.HOST ? "marin" : "ash",
+                    settings.voice(g.speaker()),
                     "speed",
-                    .95,
+                    settings.speed(),
                     "group",
                     g)),
             java.nio.file.StandardOpenOption.CREATE_NEW);
@@ -367,9 +453,9 @@ public class OpenAiSpeech implements SpeechRendering {
                             "format",
                             Map.of("type", "audio/pcm", "rate", 24000),
                             "voice",
-                            group.speaker() == Speaker.HOST ? "marin" : "ash",
+                            settings.voice(group.speaker()),
                             "speed",
-                            .95)))))) return;
+                            settings.speed())))))) return;
       } catch (Exception e) {
         failure(OpenAiAudioFailures.exception(e));
         return;
@@ -432,8 +518,8 @@ public class OpenAiSpeech implements SpeechRendering {
                       .path("output")
                       .path("voice")
                       .asText()
-                      .equals(group.speaker() == Speaker.HOST ? "marin" : "ash")
-                  || s.path("audio").path("output").path("speed").asDouble() != .95) {
+                      .equals(settings.voice(group.speaker()))
+                  || s.path("audio").path("output").path("speed").asDouble() != settings.speed()) {
                 fail("SESSION_CONFIGURATION_MISMATCH", false);
                 break;
               }

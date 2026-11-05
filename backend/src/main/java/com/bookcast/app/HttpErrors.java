@@ -2,6 +2,7 @@ package com.bookcast.app;
 
 import com.bookcast.contract.model.ErrorDto;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
@@ -31,8 +32,14 @@ public class HttpErrors {
   }
 
   @ExceptionHandler(IllegalStateException.class)
-  public ResponseEntity<ErrorDto> conflict() {
-    return error(409, "CONFLICT", "This operation is unavailable in the current state.");
+  public ResponseEntity<ErrorDto> conflict(IllegalStateException e) {
+    return switch (Objects.toString(e.getMessage(), "")) {
+      case "SPEECH_CONFIGURATION_CHANGED", "SPEECH_CONFIGURATION_MISMATCH" -> error(409, e.getMessage(),
+          "Speech settings differ from this generation. Restore its original model, voices and speed before resuming.");
+      case "SPEECH_CONFIGURATION_UNVERIFIED" -> error(409, "SPEECH_CONFIGURATION_UNVERIFIED",
+          "Cannot verify this generation's speech settings. Check its saved configuration before resuming.");
+      default -> error(409, "CONFLICT", "This operation is unavailable in the current state.");
+    };
   }
 
   @ExceptionHandler(Exception.class)

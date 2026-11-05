@@ -18,6 +18,10 @@ bookcast:
   data-dir: ${BOOKCAST_DATA_DIR:./data}
   dialogue-model: ${BOOKCAST_DIALOGUE_MODEL:gpt-5.4}
   audio-model: ${BOOKCAST_AUDIO_MODEL:gpt-realtime-2.1-mini}
+  speech:
+    host-voice: ${BOOKCAST_HOST_VOICE:marin}
+    expert-voice: ${BOOKCAST_EXPERT_VOICE:ash}
+    speed: ${BOOKCAST_AUDIO_SPEED:0.95}
   source-unit-words: 800
   encoding-timeout-seconds: ${BOOKCAST_ENCODING_TIMEOUT_SECONDS:1800}
   worker-enabled: true

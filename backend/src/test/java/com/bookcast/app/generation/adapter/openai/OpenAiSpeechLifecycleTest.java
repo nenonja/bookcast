@@ -33,6 +33,7 @@ class OpenAiSpeechLifecycleTest {
     final WebSocket.Builder builder = mock(WebSocket.Builder.class, RETURNS_SELF);
     final WebSocket socket = mock(WebSocket.class);
     final OpenAiSpeech adapter;
+    Speaker speaker = Speaker.EXPERT;
     final List<String> events = new ArrayList<>(List.of(
         """
         {"type":"session.updated","session":{"model":"gpt-realtime-2.1-mini",
@@ -69,9 +70,14 @@ class OpenAiSpeechLifecycleTest {
     }
 
     Fixture(ObjectMapper mapper, OpenAiSpeech.Limits limits) {
+      this(mapper, limits, OpenAiSpeechSettings.DEFAULT, "gpt-realtime-2.1-mini");
+    }
+
+    Fixture(ObjectMapper mapper, OpenAiSpeech.Limits limits, OpenAiSpeechSettings settings,
+        String model) {
       json = mapper;
       adapter = new OpenAiSpeech(json, "OFFLINE_PRIVATE_KEY", data.toString(),
-          "gpt-realtime-2.1-mini", limits);
+          model, settings, limits);
       ReflectionTestUtils.setField(adapter, "http", http);
       when(http.newWebSocketBuilder()).thenReturn(builder);
       when(socket.sendText(any(), eq(true))).thenReturn(CompletableFuture.completedFuture(socket));
@@ -92,7 +98,7 @@ class OpenAiSpeechLifecycleTest {
 
     AudioResult render() {
       return adapter.render(
-          new Group(0, 0, Speaker.EXPERT, "Selitys.", "hash", List.of()), job, attempt);
+          new Group(0, 0, speaker, "Selitys.", "hash", List.of()), job, attempt);
     }
 
     JsonNode diagnostics() throws IOException {
@@ -125,6 +131,59 @@ class OpenAiSpeechLifecycleTest {
     assertEquals(.0003708, result.metadata().cost(), 1e-12);
     assertArrayEquals(new byte[] {1, 0, 2, 0}, result.pcm());
     assertEquals("Selitys.", result.transcript());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"HOST,marin,ash,0.95,gpt-realtime-2.1-mini", "EXPERT,marin,ash,0.95,gpt-realtime-2.1-mini",
+      "HOST,cedar,coral,1.2,custom-model", "EXPERT,cedar,coral,1.2,custom-model"})
+  void settingsAgreeAcrossRequestAcknowledgementAndDiagnostics(Speaker speaker, String host,
+      String expert, double speed, String model) throws Exception {
+    var settings = new OpenAiSpeechSettings(host, expert, speed);
+    var f = new Fixture(new ObjectMapper(), OpenAiSpeech.Limits.DEFAULT, settings, model);
+    f.speaker = speaker;
+    ObjectNode ack = (ObjectNode) f.json.readTree(f.events.getFirst());
+    ((ObjectNode) ack.path("session")).put("model", model);
+    ((ObjectNode) ack.path("session").path("audio").path("output"))
+        .put("voice", settings.voice(speaker)).put("speed", speed);
+    f.events.set(0, ack.toString());
+    var result = f.render();
+    assertNull(result.metadata().errorCode());
+    var commands = org.mockito.ArgumentCaptor.forClass(CharSequence.class);
+    verify(f.socket, times(2)).sendText(commands.capture(), eq(true));
+    JsonNode session = f.json.readTree(commands.getAllValues().getFirst().toString()).path("session");
+    assertEquals(model, session.path("model").asText());
+    assertEquals(settings.voice(speaker), session.path("audio").path("output").path("voice").asText());
+    assertEquals(speed, session.path("audio").path("output").path("speed").asDouble());
+    JsonNode config = f.json.readTree(Files.readString(f.folder.resolve("render-config.json")));
+    assertEquals(model, config.path("model").asText());
+    assertEquals(settings.voice(speaker), config.path("voice").asText());
+    assertEquals(speed, config.path("speed").asDouble());
+    assertTrue(f.diagnostics().path("configurationValidated").asBoolean());
+    assertTrue(f.diagnostics().path("responseSubmitted").asBoolean());
+    if (model.equals("custom-model")) assertNull(result.metadata().cost());
+    else assertUsageAndCost(result);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"model", "voice", "speed", "missingSpeed"})
+  void acknowledgementMustMatchConfiguredSettingsBeforeResponseSubmission(String mismatch)
+      throws Exception {
+    var f = new Fixture(new ObjectMapper(), OpenAiSpeech.Limits.DEFAULT,
+        new OpenAiSpeechSettings("cedar", "coral", 1.2), "custom-model");
+    ObjectNode ack = (ObjectNode) f.json.readTree(f.events.getFirst());
+    ObjectNode session = (ObjectNode) ack.path("session");
+    ObjectNode output = (ObjectNode) session.path("audio").path("output");
+    session.put("model", mismatch.equals("model") ? "wrong" : "custom-model");
+    output.put("voice", mismatch.equals("voice") ? "ash" : "coral")
+        .put("speed", mismatch.equals("speed") ? .95 : 1.2);
+    if (mismatch.equals("missingSpeed")) output.remove("speed");
+    f.events.set(0, ack.toString());
+    var result = f.render();
+    assertEquals("SESSION_CONFIGURATION_MISMATCH", result.metadata().errorCode());
+    assertFalse(result.metadata().retryable());
+    verify(f.socket, times(1)).sendText(any(), eq(true));
+    assertFalse(f.diagnostics().path("configurationValidated").asBoolean());
+    assertFalse(f.diagnostics().path("responseSubmitted").asBoolean());
   }
 
   @Test
@@ -441,9 +500,10 @@ class OpenAiSpeechLifecycleTest {
   void initializationFailureClosesSpoolAndReportsSafeCloseFailure(boolean closeFails)
       throws Exception {
     ObjectMapper mapper = spy(new ObjectMapper());
+    var f = new Fixture(mapper);
+    f.adapter.prepareGeneration(f.job);
     doThrow(new JsonProcessingException("private configuration failure") {})
         .when(mapper).writeValueAsString(any());
-    var f = new Fixture(mapper);
     OutputStream stream = mock(OutputStream.class);
     if (closeFails) doThrow(new IOException("private close failure")).when(stream).close();
     try (var files = mockStatic(Files.class, invocation -> {

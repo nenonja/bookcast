@@ -54,6 +54,16 @@ public final class Capabilities {
   public interface SpeechRendering {
     Profile profile();
 
+    /**
+     * Pins or verifies adapter-owned settings before generation starts or resumes. An incompatible
+     * or unverifiable configuration must fail before provider work; accepted artifacts stay intact.
+     * Stateless adapters may use the default implementation.
+     *
+     * @param generationId non-null ID of the newly created or resumed job
+     * @throws IllegalStateException if adapter settings cannot safely be pinned or reused
+     */
+    default void prepareGeneration(UUID generationId) {}
+
     AudioResult render(Group group, UUID generationId, UUID attemptId);
   }
 

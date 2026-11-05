@@ -38,8 +38,10 @@ public class GenerationService {
 
   public Job start(UUID chapter, UUID revision, UUID request) {
     library.revision(chapter, revision);
-    return store.create(
+    var job = store.create(
         request, chapter, revision, text.profile().model(), speech.profile().model());
+    prepareGeneration(job);
+    return job;
   }
 
   public Job get(UUID id) {
@@ -64,7 +66,9 @@ public class GenerationService {
   }
 
   public Job retry(UUID id) {
-    Podcast.requireRetryable(store.get(id));
+    var job = store.get(id);
+    Podcast.requireRetryable(job);
+    prepareGeneration(job);
     store.retry(id);
     return store.get(id);
   }
@@ -129,10 +133,15 @@ public class GenerationService {
     return result;
   }
 
-  private void run(Job job) {
+  private void prepareGeneration(Job job) {
     if (!job.generationModel().equals(text.profile().model())
         || !job.audioModel().equals(speech.profile().model()))
       throw new IllegalStateException("GENERATION_PROFILE_CHANGED");
+    speech.prepareGeneration(job.id());
+  }
+
+  private void run(Job job) {
+    prepareGeneration(job);
     var source = library.revision(job.chapterId(), job.sourceRevisionId());
     var units = units(source);
     store.totals(job.id(), units.size(), job.totalAudio());

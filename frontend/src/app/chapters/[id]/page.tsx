@@ -60,9 +60,16 @@ export default function ChapterPage({params}: { params: Promise<{ id: string }> 
     async function retry() {
         if (!job) return;
         setBusy(true);
+        setError("");
         try {
             const r = await api.POST("/api/v1/generations/{generationId}/retry", {params: {path: {generationId: job.id}}});
-            if (r.data) setJob(r.data); else setError("Uudelleenyritys epäonnistui.");
+            // Known configuration conflicts have fixed, safe backend messages; other failures stay generic.
+            const message = r.error?.message;
+            if (r.data) setJob(r.data);
+            else setError(r.response?.status === 409
+                && ["SPEECH_CONFIGURATION_CHANGED", "SPEECH_CONFIGURATION_MISMATCH", "SPEECH_CONFIGURATION_UNVERIFIED"].includes(r.error?.code ?? "")
+                && typeof message === "string" && message.trim().length > 0 && message.length <= 500
+                ? message : "Uudelleenyritys epäonnistui.");
         } catch {
             setError("Uudelleenyritys epäonnistui.");
         } finally {

@@ -11,6 +11,8 @@ import com.bookcast.app.library.*;
 import java.time.OffsetDateTime;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class AudioRetryTest {
   static class Fixture {
@@ -148,6 +150,64 @@ class AudioRetryTest {
 
   static Metadata success() {
     return new Metadata(Map.of("outputTokens", 10L), .01, null, false);
+  }
+
+  @Test
+  void startPinsSpeechSettingsBeforeWorkerOrProviderWork() {
+    var f = new Fixture();
+    UUID request = UUID.randomUUID();
+    when(f.store.create(request, f.job.chapterId(), f.job.sourceRevisionId(), "text", "speech"))
+        .thenReturn(f.job);
+    assertEquals(f.job, f.service.start(f.job.chapterId(), f.job.sourceRevisionId(), request));
+    var order = inOrder(f.store, f.speech);
+    order.verify(f.store).create(request, f.job.chapterId(), f.job.sourceRevisionId(), "text", "speech");
+    order.verify(f.speech).prepareGeneration(f.job.id());
+    f.calls(0);
+    assertTrue(f.saved().isEmpty());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"SPEECH_CONFIGURATION_CHANGED", "SPEECH_CONFIGURATION_MISMATCH", "SPEECH_CONFIGURATION_UNVERIFIED"})
+  void incompatibleResumeStopsBeforeProviderWorkAndPreservesAcceptedCheckpoints(String error) {
+    var f = new Fixture();
+    var accepted = List.copyOf(f.receipts);
+    doThrow(new IllegalStateException(error)).when(f.speech).prepareGeneration(f.job.id());
+    f.service.workOne();
+    assertEquals(Status.failed, f.job.status());
+    assertEquals(error, f.job.errorCode());
+    assertFalse(f.job.retryable());
+    assertEquals(accepted, f.receipts);
+    assertTrue(f.saved().isEmpty());
+    f.calls(0);
+    verifyNoInteractions(f.artifacts);
+    verify(f.store, never()).segment(any(), any());
+    verify(f.store, never()).audio(any(), any());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"SPEECH_CONFIGURATION_CHANGED", "SPEECH_CONFIGURATION_MISMATCH", "SPEECH_CONFIGURATION_UNVERIFIED"})
+  void explicitResumeRejectsChangedSettingsBeforeRequeueAndAllowsRestoredSettings(String code) {
+    var f = new Fixture();
+    f.results(timeout(), timeout(), timeout());
+    f.service.workOne();
+    var failed = f.job;
+    var attempts = f.saved();
+    var receipts = List.copyOf(f.receipts);
+    doThrow(new IllegalStateException(code))
+        .when(f.speech).prepareGeneration(f.job.id());
+    assertEquals(code, assertThrows(IllegalStateException.class,
+        () -> f.service.retry(f.job.id())).getMessage());
+    verify(f.store, never()).retry(any());
+    assertEquals(failed, f.job);
+    assertEquals(attempts, f.saved());
+    assertEquals(receipts, f.receipts);
+    doNothing().when(f.speech).prepareGeneration(f.job.id());
+    f.service.retry(f.job.id());
+    verify(f.store).retry(f.job.id());
+    f.results(success());
+    f.service.workOne();
+    assertEquals(Status.succeeded, f.job.status());
+    verify(f.speech, never()).render(eq(f.groups.getFirst()), any(), any());
   }
 
   @Test
