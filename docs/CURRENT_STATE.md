@@ -45,7 +45,7 @@ Create/open Book
 ### Listening and cost visibility
 
 - The browser player supports play/pause, seeking, ±15 seconds, playback speed and position/duration display. Resume position is saved per generation in that browser's localStorage.
-- Completed audio has a separate attachment-download endpoint with a useful UTF-8 filename. Playback retains byte-range support. Download streams the existing artifact without model calls or re-encoding.
+- Completed audio has a separate attachment-download endpoint with a useful UTF-8 filename normalized by Apache Commons IO’s Windows filename rules. Playback retains byte-range support. Download streams the existing artifact without model calls or re-encoding.
 - Generation details display dialogue/audio model names and separate estimated dialogue, audio and total costs. Failed attempts contribute when usage is available; incomplete accounting is indicated rather than treated as measured zero spend.
 - The UI discloses that voices are AI-generated. Downloading M4A and copying it to a phone is the current local-development listening workflow.
 

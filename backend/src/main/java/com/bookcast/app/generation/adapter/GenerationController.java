@@ -7,6 +7,7 @@ import com.bookcast.contract.model.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import org.apache.commons.io.FileSystem;
 import org.springframework.core.io.*;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.RestController;
@@ -113,19 +114,16 @@ public class GenerationController implements GenerationApi {
 
   /**
    * Serves the same ready artifact as an attachment, using source metadata for a UTF-8 filename.
-   * Unsafe filename characters are replaced while Finnish letters remain intact; blank chapter
+   * Commons IO applies Windows filename rules while Finnish letters remain intact; blank chapter
    * titles fall back to {@code Chapter} and blank book titles are omitted. Uses private, no-store
-   * caching and does not change attempt history or regenerate media.
+   * caching and does not change attempt history, embedded media tags or the artifact's storage name.
    *
    * @param id non-null generation ID whose completed artifact must still be available
    * @return existing {@code audio/mp4} resource with an attachment Content-Disposition header
    */
   public ResponseEntity<Resource> downloadAudio(UUID id) {
     var audio = service.downloadAudio(id);
-    String chapter = safeTitle(audio.chapterTitle());
-    if (chapter.isBlank()) chapter = "Chapter";
-    String book = safeTitle(audio.bookTitle());
-    String filename = (book.isBlank() ? chapter : book + " - " + chapter) + ".m4a";
+    String filename = downloadFilename(audio.bookTitle(), audio.chapterTitle());
     return ResponseEntity.ok()
         .contentType(MediaType.parseMediaType("audio/mp4"))
         .header(
@@ -139,24 +137,27 @@ public class GenerationController implements GenerationApi {
   }
 
   /**
-   * Converts a nullable title into one filename component, replacing control/format characters,
-   * quotes, backslashes and reserved path characters with underscores, then stripping edge whitespace.
-   * This sanitizes the suggested download name, not the storage path used to locate the artifact.
+   * Applies {@link FileSystem#WINDOWS} rules to the complete suggested filename, independent of the
+   * backend's operating system. Commons IO replaces illegal characters with underscores and bounds
+   * the name's length while retaining its extension. Unicode allowed by the library is preserved,
+   * including format characters that the old custom filter removed. Spring separately encodes the
+   * result for Content-Disposition; no filename transformation is applied to embedded audio tags.
+   *
+   * <p>Null/blank titles use the application's existing chapter/book fallbacks. If conversion fails
+   * or Commons IO rejects the result (for example a reserved device name), use {@code Chapter.m4a}
+   * rather than fail delivery of an otherwise available artifact or expose conversion diagnostics.
    */
-  private static String safeTitle(String title) {
-    if (title == null) return "";
-    var safe = new StringBuilder();
-    title
-        .codePoints()
-        .forEach(
-            c -> {
-              if (Character.isISOControl(c)
-                  || Character.getType(c) == Character.FORMAT
-                  || c == 34
-                  || c == 92
-                  || "/:*?<>|".indexOf(c) >= 0) safe.append('_');
-              else safe.appendCodePoint(c);
-            });
-    return safe.toString().strip();
+  private static String downloadFilename(String bookTitle, String chapterTitle) {
+    String chapter = Objects.toString(chapterTitle, "").strip();
+    if (chapter.isBlank()) chapter = "Chapter";
+    String book = Objects.toString(bookTitle, "").strip();
+    String candidate = (book.isBlank() ? chapter : book + " - " + chapter) + ".m4a";
+    try {
+      String filename = FileSystem.WINDOWS.toLegalFileName(candidate, '_', StandardCharsets.UTF_8);
+      return FileSystem.WINDOWS.isLegalFileName(filename, StandardCharsets.UTF_8)
+          ? filename : "Chapter.m4a";
+    } catch (IllegalArgumentException invalidName) {
+      return "Chapter.m4a";
+    }
   }
 }
