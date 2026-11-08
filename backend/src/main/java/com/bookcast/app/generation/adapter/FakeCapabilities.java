@@ -8,9 +8,23 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Supplies deterministic, no-network capabilities when {@code bookcast.ai-mode=fake} is selected.
+ *
+ * <p>The fixed dialogue and test tone exercise the normal generation, artifact and playback paths;
+ * they do not establish source fidelity or speech quality. Both capabilities report empty usage
+ * maps and explicit zero cost because no paid operation occurs. They leave checkpoint persistence
+ * and file handling to the same application and artifact adapters used by real generation.
+ */
 @Configuration
 @ConditionalOnProperty(name = "bookcast.ai-mode", havingValue = "fake")
 public class FakeCapabilities {
+  /**
+   * Supplies a fixed two-turn Finnish placeholder, retaining the request's segment order and source
+   * block IDs. Source text, prior turns, language choices and first/last flags do not affect it.
+   *
+   * @return local text generation with the {@code fake-dialogue} model profile
+   */
   @Bean
   public TextGeneration fakeText() {
     return new TextGeneration() {
@@ -33,6 +47,14 @@ public class FakeCapabilities {
     };
   }
 
+  /**
+   * Supplies a 440 Hz test tone as signed 16-bit little-endian mono PCM at 24,000 Hz. Duration is at
+   * least six seconds, increasing with the script's whitespace-separated word count at two words per
+   * second. The returned transcript is the supplied group text, rather than a measured transcription.
+   * Job and attempt IDs do not affect rendering, and this capability writes no attempt files itself.
+   *
+   * @return local audio generation with the {@code fake-audio} model profile
+   */
   @Bean
   public SpeechRendering fakeSpeech() {
     return new SpeechRendering() {
