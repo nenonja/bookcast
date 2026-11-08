@@ -272,27 +272,28 @@ public class LocalAudioArtifacts implements AudioArtifacts {
   /**
    * Runs one local encoding/verification process, discarding stdout and stderr rather than exposing
    * command diagnostics. A nonzero exit, startup I/O failure or interrupted wait becomes
-   * {@code AUDIO_ENCODING_FAILURE}; interruption restores the thread's flag. A timeout requests
-   * forcible process termination and raises {@code ENCODING_TIMEOUT}. The interruption branch does not
-   * explicitly destroy an already started process.
+   * {@code AUDIO_ENCODING_FAILURE}; interruption restores the thread's flag. A timed-out wait raises
+   * {@code ENCODING_TIMEOUT}. On every exit, any started process still alive receives a forcible
+   * termination request, including after interruption; cleanup does not wait for termination.
    */
   private void command(List<String> args) {
+    Process process = null;
     try {
-      var process =
+      process =
           new ProcessBuilder(args)
               .redirectOutput(ProcessBuilder.Redirect.DISCARD)
               .redirectError(ProcessBuilder.Redirect.DISCARD)
               .start();
-      if (!process.waitFor(encodingTimeoutSeconds, TimeUnit.SECONDS)) {
-        process.destroyForcibly();
+      if (!process.waitFor(encodingTimeoutSeconds, TimeUnit.SECONDS))
         throw new IllegalStateException("ENCODING_TIMEOUT");
-      }
       if (process.exitValue() != 0) throw new IllegalStateException("AUDIO_ENCODING_FAILURE");
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IllegalStateException("AUDIO_ENCODING_FAILURE");
     } catch (IOException e) {
       throw new IllegalStateException("AUDIO_ENCODING_FAILURE");
+    } finally {
+      if (process != null && process.isAlive()) process.destroyForcibly();
     }
   }
 }
