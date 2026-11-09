@@ -45,13 +45,14 @@ Create/open Book
 ### Listening and cost visibility
 
 - The browser player supports play/pause, seeking, ±15 seconds, playback speed and position/duration display. Resume position is saved per generation in that browser's localStorage.
-- Completed audio has a separate attachment-download endpoint with a useful UTF-8 filename normalized by Apache Commons IO’s Windows filename rules. Playback retains byte-range support. Download streams the existing artifact without model calls or re-encoding.
+- Completed audio has a separate attachment-download endpoint with a useful UTF-8 filename normalized by Apache Commons IO’s Windows filename rules. Newly assembled M4As carry the chapter title, book album, Bookcast artist/album artist and an optional representable chapter track number. Previously completed files are preserved without automatic retagging. Playback retains byte-range support. Download streams the existing artifact without model calls or re-encoding.
 - Generation details display dialogue/audio model names and separate estimated dialogue, audio and total costs. Failed attempts contribute when usage is available; incomplete accounting is indicated rather than treated as measured zero spend.
 - The UI discloses that voices are AI-generated. Downloading M4A and copying it to a phone is the current local-development listening workflow.
 
 ## Implementation and verification
 
 - Java 21 / Spring Boot backend with two Spring Modulith modules: `library` owns source material and organization; `generation` owns jobs, dialogue and audio artifacts. Generation depends on the library public API, never the reverse.
+- A limited Spring Data JDBC pilot handles ordinary generation-job lookups through a read-only repository; critical commands and JSONB/checkpoints remain JdbcTemplate SQL. Domain/application persistence ports and Flyway migrations are unchanged. See [the assessment](SPRING_DATA_PERSISTENCE_PILOT.md).
 - PostgreSQL and Flyway persist library data, jobs and checkpoints. V1 introduces source storage and immutability triggers; V2 adds generation storage; V3 adds chapter numbers without regrouping, renumbering or replacing existing data.
 - Private candidates, raw attempts and assembled media live on the local filesystem. The database and configured data directory must be preserved together.
 - Next.js / TypeScript consumes the checked-in OpenAPI contract through generated types; Maven generates Java API interfaces and DTOs from the same contract.

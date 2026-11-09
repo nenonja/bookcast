@@ -42,12 +42,12 @@ public class GenerationController implements GenerationApi {
     var audio = service.audio(j.id());
     var attempts = service.attempts(j.id());
     double
-        text =
+        textEstimatedCost =
             attempts.stream()
                 .filter(a -> a.capability().equals("dialogue") && a.estimatedCost() != null)
                 .mapToDouble(Attempt::estimatedCost)
                 .sum(),
-        speech =
+        speechEstimatedCost =
             attempts.stream()
                 .filter(a -> a.capability().equals("audio") && a.estimatedCost() != null)
                 .mapToDouble(Attempt::estimatedCost)
@@ -64,9 +64,9 @@ public class GenerationController implements GenerationApi {
         .totalAudioGroups(j.totalAudio())
         .generationModel(j.generationModel())
         .audioModel(j.audioModel())
-        .estimatedGenerationCost(text)
-        .estimatedAudioCost(speech)
-        .totalEstimatedCost(text + speech)
+        .estimatedGenerationCost(textEstimatedCost)
+        .estimatedAudioCost(speechEstimatedCost)
+        .totalEstimatedCost(textEstimatedCost + speechEstimatedCost)
         .costComplete(attempts.stream().allMatch(a -> a.estimatedCost() != null))
         .errorCode(j.errorCode())
         .retryable(j.retryable())

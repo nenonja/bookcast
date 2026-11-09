@@ -1,6 +1,7 @@
 package com.bookcast.app.generation.adapter;
 
 import com.bookcast.app.generation.application.Capabilities.AudioArtifacts;
+import com.bookcast.app.generation.application.Capabilities.AudioMetadata;
 import com.bookcast.app.generation.domain.AudioGroups;
 import com.bookcast.app.generation.domain.Podcast.*;
 import java.io.*;
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class LocalAudioArtifacts implements AudioArtifacts {
+  private static final int MAX_M4A_TRACK_NUMBER = 65_535;
   private final Path root;
   private final long encodingTimeoutSeconds;
 
@@ -190,20 +192,25 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    * speakers; source PCM is not trimmed or rewritten. The caller selects the complete receipt list;
    * this method does not query the job's plan or determine whether groups are missing from its end.
    *
-   * <p>ffmpeg encodes mono 24 kHz PCM as AAC-LC with a 96 kbit/s target and fast-start metadata, then checks
-   * complete decoding before the encoded file's SHA-256 sidecar is written. Scratch PCM and any
+   * <p>ffmpeg encodes mono 24 kHz PCM as AAC-LC with a 96 kbit/s target and fast-start metadata. Standard
+   * M4A tags retain the chapter title, book title as album and Bookcast as artist/album artist. The
+   * optional chapter number is written as track number only in the format's unsigned 16-bit range;
+   * absent or unrepresentable numbers are omitted rather than wrapped. Titles retain their Unicode
+   * and punctuation. Arguments go directly to ffmpeg without a shell. Complete decoding is checked
+   * before the tagged file's SHA-256 sidecar is written. Scratch PCM and any
    * partial output remain on failure. A successful return alone does not mark the database job
    * succeeded; the application records that transition separately.
    *
    * @param job non-null generation ID for new assembly output files
    * @param receipts non-null ordered list of accepted checkpoints
+   * @param metadata non-null display metadata for this new file; existing media is never retagged
    * @return data-directory-relative M4A reference after encoding, decode check and checksum succeed
    * @throws IllegalStateException for {@code ASSEMBLY_ORDER}, checkpoint verification errors,
    *     {@code AUDIO_ASSEMBLY_FAILURE} on filesystem I/O, or the subprocess failures described by
    *     {@link #command(List)}
    * @throws IllegalArgumentException for a checkpoint reference outside the data directory
    */
-  public String assemble(UUID job, List<AudioReceipt> receipts) {
+  public String assemble(UUID job, List<AudioReceipt> receipts, AudioMetadata metadata) {
     try {
       Path folder = root.resolve(job.toString());
       Files.createDirectories(folder);
@@ -221,8 +228,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
                     [r.group().speaker() == receipts.get(i + 1).group().speaker() ? 9600 : 16800]);
         }
       }
-      command(
-          List.of(
+      var encode = new ArrayList<>(List.of(
               "ffmpeg",
               "-nostdin",
               "-v",
@@ -238,6 +244,14 @@ public class LocalAudioArtifacts implements AudioArtifacts {
               pcm.toString(),
               "-map_metadata",
               "-1",
+              "-metadata",
+              "title=" + metadata.chapterTitle(),
+              "-metadata",
+              "album=" + metadata.bookTitle(),
+              "-metadata",
+              "artist=Bookcast",
+              "-metadata",
+              "album_artist=Bookcast",
               "-c:a",
               "aac",
               "-profile:a",
@@ -245,8 +259,12 @@ public class LocalAudioArtifacts implements AudioArtifacts {
               "-b:a",
               "96k",
               "-movflags",
-              "+faststart",
-              m4a.toString()));
+              "+faststart"));
+      if (metadata.chapterNumber() != null && metadata.chapterNumber() > 0
+          && metadata.chapterNumber() <= MAX_M4A_TRACK_NUMBER)
+        encode.addAll(List.of("-metadata", "track=" + metadata.chapterNumber()));
+      encode.add(m4a.toString());
+      command(encode);
       command(
           List.of(
               "ffmpeg",

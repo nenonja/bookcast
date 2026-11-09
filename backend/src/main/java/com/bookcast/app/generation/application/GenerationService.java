@@ -181,7 +181,8 @@ public class GenerationService {
       receipts.add(receipt);
     }
     store.state(job.id(), "running", "assembly", null, false, null);
-    String finalPath = artifacts.assemble(job.id(), receipts);
+    String finalPath = artifacts.assemble(job.id(), receipts,
+        new AudioMetadata(source.bookTitle(), source.title(), source.chapterNumber()));
     store.state(job.id(), "succeeded", "complete", null, false, finalPath);
   }
 

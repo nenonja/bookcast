@@ -45,6 +45,16 @@ public final class Capabilities {
 
   public record AudioResult(byte[] pcm, String transcript, Metadata metadata) {}
 
+  /**
+   * Display metadata captured for a newly assembled chapter file. Titles are content, not filenames;
+   * adapters must not apply filesystem character replacement to these tags.
+   *
+   * @param bookTitle non-null book title for album grouping
+   * @param chapterTitle non-null chapter title for the media player's track title
+   * @param chapterNumber chapter order, or {@code null} for an unnumbered legacy chapter
+   */
+  public record AudioMetadata(String bookTitle, String chapterTitle, Integer chapterNumber) {}
+
   public interface TextGeneration {
     Profile profile();
 
@@ -74,7 +84,7 @@ public final class Capabilities {
 
     void verify(AudioReceipt receipt);
 
-    String assemble(UUID job, List<AudioReceipt> receipts);
+    String assemble(UUID job, List<AudioReceipt> receipts, AudioMetadata metadata);
 
     String absolutePath(String reference);
   }

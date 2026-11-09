@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import com.bookcast.app.generation.domain.AudioGroups;
+import com.bookcast.app.generation.application.Capabilities.AudioMetadata;
 import com.bookcast.app.generation.domain.Podcast.*;
 import java.io.IOException;
 import java.nio.file.*;
@@ -18,6 +19,7 @@ class LocalAudioArtifactsProcessTest {
   @TempDir Path data;
   final UUID job = UUID.randomUUID();
   final byte[] pcm = {1, 0, 2, 0};
+  final AudioMetadata metadata = new AudioMetadata("Book", "Chapter", 1);
 
   AudioReceipt receipt() {
     var group = new Group(0, 0, Speaker.EXPERT, "Selitys.", "script-hash", List.of());
@@ -41,7 +43,7 @@ class LocalAudioArtifactsProcessTest {
             when(builder.start()).thenReturn(context.getCount() == interruptedCommand ? active : completed))) {
       try {
         var error = assertThrows(IllegalStateException.class,
-            () -> artifacts.assemble(job, List.of(receipt)));
+            () -> artifacts.assemble(job, List.of(receipt), metadata));
         assertEquals("AUDIO_ENCODING_FAILURE", error.getMessage());
         assertTrue(Thread.currentThread().isInterrupted());
       } finally {
@@ -67,7 +69,7 @@ class LocalAudioArtifactsProcessTest {
     try (var builders = mockConstruction(ProcessBuilder.class,
         withSettings().defaultAnswer(RETURNS_SELF), (builder, context) -> when(builder.start()).thenReturn(active))) {
       var error = assertThrows(IllegalStateException.class,
-          () -> artifacts.assemble(job, List.of(receipt)));
+          () -> artifacts.assemble(job, List.of(receipt), metadata));
       assertEquals("ENCODING_TIMEOUT", error.getMessage());
       verify(active).waitFor(17, TimeUnit.SECONDS);
       verify(active).destroyForcibly();
@@ -86,7 +88,7 @@ class LocalAudioArtifactsProcessTest {
     try (var builders = mockConstruction(ProcessBuilder.class,
         withSettings().defaultAnswer(RETURNS_SELF), (builder, context) -> when(builder.start()).thenReturn(completed))) {
       var error = assertThrows(IllegalStateException.class,
-          () -> artifacts.assemble(job, List.of(receipt)));
+          () -> artifacts.assemble(job, List.of(receipt), metadata));
       assertEquals("AUDIO_ENCODING_FAILURE", error.getMessage());
       verify(completed, never()).destroyForcibly();
       assertEquals(1, builders.constructed().size());
@@ -101,7 +103,7 @@ class LocalAudioArtifactsProcessTest {
         withSettings().defaultAnswer(RETURNS_SELF), (builder, context) ->
             when(builder.start()).thenThrow(new IOException("private startup details")))) {
       var error = assertThrows(IllegalStateException.class,
-          () -> artifacts.assemble(job, List.of(receipt)));
+          () -> artifacts.assemble(job, List.of(receipt), metadata));
       assertEquals("AUDIO_ENCODING_FAILURE", error.getMessage());
       assertEquals(1, builders.constructed().size());
     }

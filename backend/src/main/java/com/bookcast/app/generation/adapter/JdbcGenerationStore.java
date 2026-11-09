@@ -4,6 +4,7 @@ import com.bookcast.app.generation.application.GenerationStore;
 import com.bookcast.app.generation.domain.Podcast.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
+import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,31 +23,27 @@ import org.springframework.transaction.annotation.Transactional;
  * throws {@link NoSuchElementException} for an unknown job. Database failures propagate, while JSON
  * encoding/decoding failures become payload-free {@code PERSISTENCE_ENCODING} or
  * {@code PERSISTENCE_DECODING} errors.
+ *
+ * <p>Ordinary job lookups use a restricted Spring Data JDBC repository. SQL commands and repository
+ * reads share the same JDBC transaction manager; RETURNING rows use Spring's record row mapper and
+ * the same explicit persistence-to-application mapping. There is no ORM-managed entity graph.
  */
 @Repository
 public class JdbcGenerationStore implements GenerationStore {
+  private static final DataClassRowMapper<GenerationRow> JOB_ROWS =
+      new DataClassRowMapper<>(GenerationRow.class);
   private final JdbcTemplate db;
   private final ObjectMapper json;
+  private final GenerationReadRepository reads;
 
-  public JdbcGenerationStore(JdbcTemplate db, ObjectMapper json) {
+  public JdbcGenerationStore(JdbcTemplate db, ObjectMapper json, GenerationReadRepository reads) {
     this.db = db;
     this.json = json;
+    this.reads = reads;
   }
 
   private Job row(java.sql.ResultSet r) throws java.sql.SQLException {
-    return new Job(
-        r.getObject("id", UUID.class),
-        r.getObject("chapter_id", UUID.class),
-        r.getObject("revision_id", UUID.class),
-        Status.valueOf(r.getString("status")),
-        r.getString("stage"),
-        r.getInt("total_segments"),
-        r.getInt("total_audio"),
-        r.getString("generation_model"),
-        r.getString("audio_model"),
-        r.getString("error_code"),
-        r.getBoolean("retryable"),
-        r.getString("audio_path"));
+    return JOB_ROWS.mapRow(r, 0).toJob();
   }
 
   /**
@@ -78,33 +75,26 @@ public class JdbcGenerationStore implements GenerationStore {
         revision,
         text,
         audio);
-    var rows = db.query("select * from generations where request_id=?", (r, n) -> row(r), request);
-    if (!rows.isEmpty()) {
-      var j = rows.getFirst();
+    var existing = reads.findByRequestId(request);
+    if (existing.isPresent()) {
+      var j = existing.get().toJob();
       if (!j.chapterId().equals(chapter) || !j.sourceRevisionId().equals(revision))
         throw new IllegalStateException("IDEMPOTENCY_CONFLICT");
       return j;
     }
-    rows =
-        db.query(
-            "select * from generations where revision_id=? and status in ('queued','running')",
-            (r, n) -> row(r),
-            revision);
+    var rows = reads.findByRevisionIdAndStatusIn(revision, List.of(Status.queued, Status.running));
     if (rows.isEmpty()) throw new IllegalStateException("GENERATION_CONFLICT");
-    return rows.getFirst();
+    return rows.getFirst().toJob();
   }
 
   public Job get(UUID id) {
-    var rows = db.query("select * from generations where id=?", (r, n) -> row(r), id);
-    if (rows.isEmpty()) throw new NoSuchElementException();
-    return rows.getFirst();
+    return reads.findById(id).map(GenerationRow::toJob).orElseThrow(NoSuchElementException::new);
   }
 
   public List<Job> list(UUID chapter) {
-    return db.query(
-        "select * from generations where chapter_id=? order by created_at desc",
-        (r, n) -> row(r),
-        chapter);
+    var jobs = new ArrayList<Job>();
+    reads.findByChapterIdOrderByCreatedAtDescIdDesc(chapter).forEach(row -> jobs.add(row.toJob()));
+    return jobs;
   }
 
   /**

@@ -111,7 +111,7 @@ class AudioRetryTest {
           .state(any(), any(), any(), any(), anyBoolean(), any());
       when(artifacts.preserve(any(), any(), any(), any())).thenReturn("raw");
       when(artifacts.validate(any(), any(), any())).thenAnswer(i -> receipt(i.getArgument(0)));
-      when(artifacts.assemble(any(), any())).thenReturn("final");
+      when(artifacts.assemble(any(), any(), any())).thenReturn("final");
       service =
           new GenerationService(
               library,
@@ -330,6 +330,8 @@ class AudioRetryTest {
     verify(f.speech, never()).render(any(), any(), any());
     verify(f.text, never()).generate(any());
     assertEquals(Status.succeeded, f.job.status());
+    verify(f.artifacts).assemble(eq(f.job.id()), eq(f.receipts),
+        eq(new AudioMetadata("Book", "Chapter", null)));
   }
 
   @Test

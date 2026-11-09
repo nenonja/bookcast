@@ -31,6 +31,13 @@ class ArchitectureTest {
         .check(classes);
     noClasses()
         .that()
+        .resideOutsideOfPackage("..adapter..")
+        .should()
+        .dependOnClassesThat()
+        .resideInAnyPackage("org.springframework.data..", "jakarta.persistence..", "org.hibernate..")
+        .check(classes);
+    noClasses()
+        .that()
         .resideInAnyPackage("..library..")
         .should()
         .dependOnClassesThat()
