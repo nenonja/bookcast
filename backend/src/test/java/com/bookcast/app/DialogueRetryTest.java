@@ -9,6 +9,9 @@ import com.bookcast.app.generation.domain.Podcast.*;
 import com.bookcast.app.library.ChapterSource;
 import java.util.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 class DialogueRetryTest {
   static class Fixture extends AudioRetryTest.Fixture {
@@ -86,6 +89,8 @@ class DialogueRetryTest {
     f.textResults(AudioRetryTest.timeout(), AudioRetryTest.success());
     f.service.workOne();
     f.textCalls(2);
+    verify(f.text, times(2))
+        .generate(argThat(r -> r.first() && r.last() && r.previousTurns().isEmpty()));
     assertEquals(Status.succeeded, f.job.status());
     assertEquals(
         List.of("failed", "succeeded"),
@@ -215,6 +220,52 @@ class DialogueRetryTest {
     f.results(AudioRetryTest.success());
     f.service.workOne();
     verify(f.text, never()).generate(any());
+  }
+
+  @ParameterizedTest(name = "{0} segments already checkpointed")
+  @ValueSource(ints = {0, 1, 2})
+  void segmentBoundariesAndBoundedContinuitySurviveResume(int completed) {
+    var f = new Fixture(false);
+    var source = f.library.revision(f.job.chapterId(), f.job.sourceRevisionId());
+    var blocks = new ArrayList<ChapterSource.Block>();
+    var planned = new ArrayList<Segment>();
+    for (int order = 0; order < 3; order++) {
+      UUID id = UUID.randomUUID();
+      blocks.add(new ChapterSource.Block(id, order, "word ".repeat(800), null));
+      var turns = new ArrayList<Turn>();
+      for (int turn = 0; turn < 6; turn++)
+        turns.add(new Turn(turn % 2 == 0 ? Speaker.HOST : Speaker.EXPERT,
+            "Ajatus " + order + "." + turn + "."));
+      planned.add(new Segment(order, List.of(id), turns));
+    }
+    when(f.library.revision(f.job.chapterId(), f.job.sourceRevisionId()))
+        .thenReturn(new ChapterSource(source.id(), source.bookId(), source.bookTitle(),
+            source.title(), source.sourceRevisionId(), source.sourceLanguage(), source.sourceHash(),
+            source.createdAt(), blocks));
+    f.segments.addAll(planned.subList(0, completed));
+    when(f.text.generate(any())).thenAnswer(i -> {
+      TextRequest request = i.getArgument(0);
+      return new TextResult(planned.get(request.order()), AudioRetryTest.success());
+    });
+
+    f.service.workOne();
+
+    assertEquals(Status.succeeded, f.job.status());
+    assertEquals(planned, f.segments);
+    var requests = ArgumentCaptor.forClass(TextRequest.class);
+    verify(f.text, times(3 - completed)).generate(requests.capture());
+    assertEquals(
+        java.util.stream.IntStream.range(completed, 3).boxed().toList(),
+        requests.getAllValues().stream().map(TextRequest::order).toList());
+    for (var request : requests.getAllValues()) {
+      int order = request.order();
+      assertEquals(order == 0, request.first());
+      assertEquals(order == 2, request.last());
+      assertEquals(List.of(blocks.get(order)), request.blocks());
+      assertEquals(
+          order == 0 ? List.of() : planned.get(order - 1).dialogueTurns().subList(2, 6),
+          request.previousTurns());
+    }
   }
 
   @Test

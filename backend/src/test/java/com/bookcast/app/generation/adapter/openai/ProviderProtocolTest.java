@@ -9,11 +9,16 @@ import com.bookcast.app.library.ChapterSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.*;
 import java.net.http.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class ProviderProtocolTest {
@@ -21,7 +26,46 @@ class ProviderProtocolTest {
   final ObjectMapper json = new ObjectMapper();
 
   @Test
-  void realTextAdapterParsesStructuredFixtureAndRetainsUsage() throws Exception {
+  void dialoguePromptRetainsOriginalContractVerbatim() throws Exception {
+    // Pin the pre-style contract independently of the production resource: loading the same
+    // resource twice would not detect weakened source, language, speaker or output constraints.
+    String baseline = resourceText("/prompts/dialogue-v1-baseline.txt").stripTrailing();
+    String prompt = resourceText("/prompts/dialogue-v1.txt");
+    assertTrue(prompt.startsWith(baseline + "\n\n"),
+        "Keep the original contract intact before adding conversational style guidance");
+  }
+
+  @Test
+  void additiveStyleGuidanceStaysSelectiveAndWithinSuppliedContext() throws Exception {
+    String baseline = resourceText("/prompts/dialogue-v1-baseline.txt").stripTrailing();
+    String prompt = resourceText("/prompts/dialogue-v1.txt");
+    String guidance = prompt.substring(Math.min(prompt.length(), baseline.length()));
+    assertAll(
+        () -> assertTrue(guidance.contains("must not relax the constraints above")),
+        () -> assertTrue(guidance.contains("Make HOST's contributions more meaningful, not more frequent")),
+        () -> assertTrue(guidance.contains("Never invent examples, reasoning or conclusions for liveliness")),
+        () -> assertTrue(guidance.contains("Mix brief, useful exchanges with longer explanations")),
+        () -> assertTrue(guidance.contains("hyvä kysymys")),
+        () -> assertTrue(guidance.contains("juuri näin")),
+        () -> assertTrue(guidance.contains("Only when isFirst is true")),
+        () -> assertTrue(guidance.contains("Only when isLast is true")),
+        () -> assertTrue(guidance.contains("If both flags are true")),
+        () -> assertTrue(guidance.contains("only if the supplied source explicitly previews it")),
+        () -> assertTrue(guidance.contains("Never invent future topics or imply a future episode already exists")),
+        () -> assertTrue(guidance.contains("Never imply knowledge of unsupplied chapters or conversations")));
+  }
+
+  private String resourceText(String name) throws Exception {
+    try (var resource = getClass().getResourceAsStream(name)) {
+      assertNotNull(resource, name);
+      return new String(resource.readAllBytes(), StandardCharsets.UTF_8);
+    }
+  }
+
+  @ParameterizedTest(name = "order={0}, first={1}, last={2}")
+  @CsvSource({"0, true, false", "1, false, false", "2, false, true", "0, true, true"})
+  void realTextAdapterPassesPromptBoundariesAndContinuityAndParsesFixture(
+      int order, boolean first, boolean last) throws Exception {
     var adapter = new OpenAiText(json, "offline-only", data.toString());
     HttpClient http = mock(HttpClient.class);
     ReflectionTestUtils.setField(adapter, "http", http);
@@ -29,7 +73,7 @@ class ProviderProtocolTest {
     UUID block = UUID.randomUUID();
     var segment =
         new Segment(
-            0,
+            order,
             List.of(block),
             List.of(new Turn(Speaker.HOST, "Miksi?"), new Turn(Speaker.EXPERT, "Siksi.")));
     String payload =
@@ -55,15 +99,22 @@ class ProviderProtocolTest {
     when(response.body()).thenReturn(payload);
     when(http.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class)))
         .thenReturn(response);
+    var blocks = List.of(new ChapterSource.Block(block, 0, "Example source.", null));
+    var continuity =
+        first
+            ? List.<Turn>of()
+            : List.of(
+                new Turn(Speaker.HOST, "Entä tämän ratkaisun rajoitukset?"),
+                new Turn(Speaker.EXPERT, "Niitä tarkastellaan seuraavaksi."));
     var request =
         new TextRequest(
             UUID.randomUUID(),
             UUID.randomUUID(),
-            0,
-            List.of(new ChapterSource.Block(block, 0, "Example source.", null)),
-            List.of(),
-            true,
-            true,
+            order,
+            blocks,
+            continuity,
+            first,
+            last,
             "en",
             "fi");
     var result = adapter.generate(request);
@@ -75,7 +126,51 @@ class ProviderProtocolTest {
             data.resolve(request.generationId().toString())
                 .resolve(request.attemptId().toString())
                 .resolve("dialogue-candidate.json")));
-    verify(http, times(1)).send(any(), any());
+    var outgoing = ArgumentCaptor.forClass(HttpRequest.class);
+    verify(http, times(1)).send(outgoing.capture(), any());
+    var body = json.readTree(requestBody(outgoing.getValue()));
+    try (var resource = getClass().getResourceAsStream("/prompts/dialogue-v1.txt")) {
+      assertNotNull(resource);
+      assertEquals(
+          new String(resource.readAllBytes(), StandardCharsets.UTF_8),
+          body.path("instructions").asText());
+    }
+    assertEquals("gpt-5.4", body.path("model").asText());
+    var input = json.readTree(body.path("input").asText());
+    // Only this unit and its supplied continuity are available; no implicit chapter memory.
+    assertEquals(
+        json.valueToTree(
+            Map.of(
+                "order", order,
+                "isFirst", first,
+                "isLast", last,
+                "sourceLanguage", "en",
+                "outputLanguage", "fi",
+                "sourceBlocks", blocks,
+                "continuity", continuity)),
+        input);
+  }
+
+  private String requestBody(HttpRequest request) throws Exception {
+    var body = HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8);
+    request.bodyPublisher().orElseThrow().subscribe(new Flow.Subscriber<ByteBuffer>() {
+      public void onSubscribe(Flow.Subscription subscription) {
+        body.onSubscribe(subscription);
+      }
+
+      public void onNext(ByteBuffer buffer) {
+        body.onNext(List.of(buffer));
+      }
+
+      public void onError(Throwable error) {
+        body.onError(error);
+      }
+
+      public void onComplete() {
+        body.onComplete();
+      }
+    });
+    return body.getBody().toCompletableFuture().get(1, TimeUnit.SECONDS);
   }
 
   @Test
