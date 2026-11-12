@@ -106,6 +106,23 @@ class OpenAiSpeechSettingsTest {
     assertFalse(Files.exists(data.resolve(job.toString()).resolve(attempt.toString())));
   }
 
+  @Test
+  void freshGenerationPinsCurrentSettingsWithoutChangingPreviousGeneration() throws Exception {
+    UUID original = UUID.randomUUID(), fresh = UUID.randomUUID();
+    adapter(OpenAiSpeechSettings.DEFAULT).prepareGeneration(original);
+    byte[] originalBytes = Files.readAllBytes(snapshot(original));
+    var originalModified = Files.getLastModifiedTime(snapshot(original));
+    var current = new OpenAiSpeech(json, "", data.toString(), "current-model",
+        new OpenAiSpeechSettings("cedar", "coral", 1.2));
+    current.prepareGeneration(fresh);
+    assertEquals(json.valueToTree(Map.of("model", "current-model", "hostVoice", "cedar",
+        "expertVoice", "coral", "speed", 1.2)), json.readTree(Files.readString(snapshot(fresh))));
+    assertArrayEquals(originalBytes, Files.readAllBytes(snapshot(original)));
+    assertEquals(originalModified, Files.getLastModifiedTime(snapshot(original)));
+    assertEquals("SPEECH_CONFIGURATION_CHANGED", assertThrows(IllegalStateException.class,
+        () -> current.prepareGeneration(original)).getMessage());
+  }
+
   Path legacyAttempt(UUID job, Speaker speaker) throws Exception {
     Path attempt = Files.createDirectories(data.resolve(job.toString()).resolve(UUID.randomUUID().toString()));
     Files.writeString(attempt.resolve("render-config.json"), json.writeValueAsString(Map.of(

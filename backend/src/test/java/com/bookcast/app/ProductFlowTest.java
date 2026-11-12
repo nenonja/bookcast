@@ -9,6 +9,7 @@ import com.bookcast.app.generation.application.*;
 import com.bookcast.app.generation.application.Capabilities.*;
 import com.bookcast.app.generation.domain.Podcast.*;
 import com.bookcast.app.library.Library;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.*;
 import java.util.*;
 import org.junit.jupiter.api.Test;
@@ -56,6 +57,8 @@ class ProductFlowTest {
   @Autowired JdbcTemplate db;
   @Autowired MockMvc mvc;
   @Autowired FlakySpeech speech;
+  @Autowired TextGeneration text;
+  @Autowired ObjectMapper json;
 
   @TestConfiguration
   static class Fakes {
@@ -83,6 +86,81 @@ class ProductFlowTest {
       }
       return delegate.render(g, job, attempt);
     }
+  }
+
+  private UUID requestGeneration(UUID chapter, UUID revision, UUID request) throws Exception {
+    var response = mvc.perform(post("/api/v1/chapters/" + chapter + "/generations")
+            .contentType("application/json")
+            .content(json.writeValueAsString(Map.of("requestId", request, "sourceRevisionId", revision))))
+        .andExpect(status().isAccepted())
+        .andExpect(jsonPath("$.sourceRevisionId").value(revision.toString()))
+        .andReturn().getResponse();
+    return UUID.fromString(json.readTree(response.getContentAsString()).path("id").asText());
+  }
+
+  @Test
+  void freshGenerationAfterCompletionPreservesOriginalAndKeepsIndependentHistory() throws Exception {
+    var chapter = library.importChapter(library.createBook("Comparison fixture").id(), 6,
+        "Fresh generation fixture", "A substantive source argument.\n\nAn important qualification.", "en");
+    UUID originalRequest = UUID.randomUUID();
+    UUID original = requestGeneration(chapter.id(), chapter.sourceRevisionId(), originalRequest);
+    assertTrue(service.workOne());
+    var originalJob = service.get(original);
+    assertEquals(Status.succeeded, originalJob.status());
+    var originalSegments = service.segments(original);
+    var originalAudio = service.audio(original);
+    var originalAttempts = service.attempts(original);
+    Path originalFile = Path.of(service.audioPath(original));
+    byte[] originalBytes = Files.readAllBytes(originalFile);
+    var originalModified = Files.getLastModifiedTime(originalFile);
+
+    UUID freshRequest = UUID.randomUUID();
+    UUID fresh = requestGeneration(chapter.id(), chapter.sourceRevisionId(), freshRequest);
+    assertNotEquals(original, fresh);
+    assertEquals(Status.queued, service.get(fresh).status());
+    assertEquals(text.profile().model(), service.get(fresh).generationModel());
+    assertEquals(speech.profile().model(), service.get(fresh).audioModel());
+    assertEquals(0, service.get(fresh).totalSegments());
+    assertEquals(0, service.get(fresh).totalAudio());
+    assertTrue(service.segments(fresh).isEmpty());
+    assertTrue(service.audio(fresh).isEmpty());
+    assertTrue(service.attempts(fresh).isEmpty());
+    assertEquals(fresh, requestGeneration(chapter.id(), chapter.sourceRevisionId(), freshRequest));
+    assertEquals(fresh, requestGeneration(chapter.id(), chapter.sourceRevisionId(), UUID.randomUUID()));
+    assertEquals(original, requestGeneration(chapter.id(), chapter.sourceRevisionId(), originalRequest));
+    mvc.perform(post("/api/v1/generations/" + original + "/retry"))
+        .andExpect(status().isConflict());
+    mvc.perform(get("/api/v1/generations/" + original + "/audio/download"))
+        .andExpect(status().isOk()).andExpect(content().bytes(originalBytes));
+
+    assertTrue(service.workOne());
+    assertFalse(service.workOne());
+    var freshJob = service.get(fresh);
+    assertEquals(Status.succeeded, freshJob.status());
+    assertNotEquals(originalJob.audioPath(), freshJob.audioPath());
+    assertTrue(freshJob.audioPath().startsWith(fresh + "/"));
+    assertTrue(Files.isRegularFile(Path.of(service.audioPath(fresh))));
+    assertFalse(service.segments(fresh).isEmpty());
+    assertEquals(originalSegments.size(), service.segments(fresh).size());
+    assertEquals(originalAudio.size(), service.audio(fresh).size());
+    assertTrue(service.audio(fresh).stream().allMatch(receipt -> receipt.path().startsWith(fresh + "/")));
+    assertEquals(originalAttempts.size(), service.attempts(fresh).size());
+    var originalAttemptIds = originalAttempts.stream().map(Attempt::id).toList();
+    assertTrue(service.attempts(fresh).stream().noneMatch(attempt -> originalAttemptIds.contains(attempt.id())));
+    assertEquals(originalJob, service.get(original));
+    assertEquals(originalSegments, service.segments(original));
+    assertEquals(originalAudio, service.audio(original));
+    assertEquals(new HashSet<>(originalAttempts), new HashSet<>(service.attempts(original)));
+    assertArrayEquals(originalBytes, Files.readAllBytes(originalFile));
+    assertEquals(originalModified, Files.getLastModifiedTime(originalFile));
+    assertEquals(chapter, library.revision(chapter.id(), chapter.sourceRevisionId()));
+    assertEquals(1, db.queryForObject("select count(*) from source_revisions where chapter_id=?",
+        Integer.class, chapter.id()));
+    assertEquals(Set.of(original, fresh), new HashSet<>(service.list(chapter.id()).stream().map(Job::id).toList()));
+    mvc.perform(get("/api/v1/generations/" + original + "/audio"))
+        .andExpect(status().isOk()).andExpect(content().bytes(originalBytes));
+    mvc.perform(get("/api/v1/generations/" + original + "/audio/download"))
+        .andExpect(status().isOk()).andExpect(content().bytes(originalBytes));
   }
 
   @Test

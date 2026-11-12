@@ -70,6 +70,10 @@ Older imports already have Book associations but no reliable chapter numbers. Mi
 
 The book API is `/api/v1/books` and `/api/v1/books/{bookId}/chapters`. Organization uses `PUT /api/v1/chapters/{chapterId}/placement`. The existing top-level chapter import URL remains, now requiring `bookId` and `chapterNumber`; revision imports remain independent of organization. No earlier-chapter source or dialogue is sent to AI; cross-chapter context is deferred.
 
+To create another podcast after completion, open the Book and Chapter and choose **Generoi uusi podcast**. This explicitly starts new paid work from the chapter's current immutable source revision, with empty checkpoints and current models, voices, speed and dialogue prompt. Restart/rebuild the backend after editing the bundled prompt so the running adapter loads it. No source re-import is needed. The latest podcast stays at the top; expand **Aiemmat valmiit podcastit** for older completed players and **Download audio** links. Existing jobs, costs and files are preserved. Failed-job **Yritä keskeytynyttä vaihetta uudelleen** continues that same job from its checkpoints instead.
+
+Both first and fresh generation use the existing creation API. Each confirmed creation clears its browser pending-request key; the next explicit creation gets a fresh UUID. A lost/unsuccessful response retains that key so resubmission remains idempotent. Legacy permanent request keys are left intact and are not reused for fresh work. Concurrent starts still resolve to the existing active job for that source revision through the database constraint; the UI offers no fresh-generation action while that job is active.
+
 ## Contract and persistence
 
 `api/openapi.json` is authoritative. Maven generates Java endpoint interfaces and DTOs. Regenerate the browser types after contract changes:
