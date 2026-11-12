@@ -671,6 +671,8 @@ Add abstractions when the capability becomes real.
 
 # 13. Persistence
 
+See [the current data model](DATA_MODEL.md) for the ER diagram, enforced foreign keys, JSONB references and ownership boundaries.
+
 Persistent state is required early because source revisions and generated scripts must survive restarts.
 
 PostgreSQL is the expected initial relational store.
