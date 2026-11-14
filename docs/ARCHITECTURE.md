@@ -16,6 +16,12 @@ Engineering heuristics belong in `docs/ENGINEERING_PRINCIPLES.md`.
 
 Product intent belongs in `docs/PRODUCT_VISION.md`.
 
+Implementation diagrams:
+
+- [Java domain model and ownership boundaries](DOMAIN_MODEL.md)
+- [Generation lifecycle, execution and recovery](GENERATION_FLOW.md)
+- [Relational data model and ER diagram](DATA_MODEL.md)
+
 When implementation and documentation disagree, surface the disagreement rather than silently assuming either one is correct.
 
 ---
