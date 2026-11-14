@@ -313,11 +313,11 @@ Owned by `library`.
 
 Stable normalized source content.
 
-### Script segment
+### Dialogue segment
 
 A retryable generation artifact.
 
-A ScriptSegment:
+A DialogueSegment:
 
 - covers an explicit source range
 - contains multiple dialogue turns
@@ -351,7 +351,7 @@ Vendor voice identifiers are not dialogue-domain concepts.
 
 Independent generation and coherent conversation create tension.
 
-Therefore a ScriptSegment may require contextual information beyond only the source blocks it covers.
+Therefore a DialogueSegment may require contextual information beyond only the source blocks it covers.
 
 The precise continuity strategy must be learned through real-model experimentation.
 
@@ -397,7 +397,7 @@ Text generation capability
 
         ↓
 
-Validated ScriptSegment
+Validated DialogueSegment
 ├── source coverage
 └── ordered DialogueTurn[]
 ```
@@ -614,7 +614,7 @@ Avoid unbounded automatic retries because provider calls cost money.
 
 # 11. Generated script validation
 
-Probabilistic generation must pass deterministic structural validation before becoming a valid ScriptSegment.
+Probabilistic generation must pass deterministic structural validation before becoming a valid DialogueSegment.
 
 Initial checks may include:
 
@@ -764,7 +764,7 @@ Implemented flow:
 Next.js pasted-text import
   → library: Book / Chapter / immutable SourceRevision / ordered SourceBlocks
   → generation: queued / running / succeeded / failed
-  → GPT-5.4 low: validated ScriptSegments / HOST and EXPERT DialogueTurns
+  → GPT-5.4 low: validated DialogueSegments / HOST and EXPERT DialogueTurns
   → Realtime Mini: isolated audio groups, marin / ash, speed 0.95
   → preserved PCM / transcript / attempt metadata + waveform validation
   → one AAC-LC M4A
@@ -785,7 +785,7 @@ The speech port has a preparation hook that pins/verifies adapter-owned settings
 
 The dialogue adapter uses the established v4-style Finnish guidance, roughly 800-word units and the previous four turns. These are initial execution settings, not domain constants or proof of chapter-scale fidelity. Chapter and source revision identities are fixed for a generation. Source block IDs declare coverage, not semantic correctness. No expensive semantic verifier runs in this slice.
 
-The audio adapter uses isolated Realtime contexts and bounded contiguous same-speaker groups. Turn slices retain exact text and ordering, including long turns split for transport. Transcript lexical differences are retained diagnostically, never automatically rerendered. Deterministic PCM validation rejects missing activity, long leading/trailing silence, internal stalls and implausible speech rates. Raw attempts remain unchanged. Realtime acceptance correlates response/item identifiers and output/content indices to exactly one completed assistant audio message, rather than requiring a one-item response array. Only additional empty completed assistant message envelopes are explicitly harmless; text-only extras, actionable items and ambiguous correlation are rejected. Safe structural sidecars retain item summaries, correlation identifiers and event counts without provider payload text. Assembly inserts only 200/350 ms pauses and performs one AAC-LC encode plus a complete decode check. The application passes book/chapter display metadata through the audio-artifact port; standard M4A tags are written during that encode, before the final checksum. Existing media is never automatically retagged. Live-specific soft wrapping, orphan salvage and completion heuristics remain in the spike.
+The audio adapter uses isolated Realtime contexts and bounded contiguous same-speaker speech chunks. Turn spans retain exact text and ordering, including long turns split for transport. Transcript lexical differences are retained diagnostically, never automatically rerendered. Deterministic PCM validation rejects missing activity, long leading/trailing silence, internal stalls and implausible speech rates. Raw attempts remain unchanged. Realtime acceptance correlates response/item identifiers and output/content indices to exactly one completed assistant audio message, rather than requiring a one-item response array. Only additional empty completed assistant message envelopes are explicitly harmless; text-only extras, actionable items and ambiguous correlation are rejected. Safe structural sidecars retain item summaries, correlation identifiers and event counts without provider payload text. Assembly inserts only 200/350 ms pauses and performs one AAC-LC encode plus a complete decode check. The application passes book/chapter display metadata through the audio-artifact port; standard M4A tags are written during that encode, before the final checksum. Existing media is never automatically retagged. Live-specific soft wrapping, orphan salvage and completion heuristics remain in the spike.
 
 Safe attempt metadata includes capability/unit identity, provider/model, outcome, elapsed time, available usage, estimated USD cost, retryability and bounded error classification. Missing usage is shown as incomplete cost information, not zero measured spend. API credentials, source contents, prompts and raw response bodies are never logged. Source and transcript payloads are available only through the user-facing API and private artifact storage.
 

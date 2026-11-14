@@ -15,8 +15,8 @@ import org.mockito.ArgumentCaptor;
 
 class DialogueRetryTest {
   static class Fixture extends AudioRetryTest.Fixture {
-    final List<Segment> segments = new ArrayList<>();
-    final Segment pending;
+    final List<DialogueSegment> segments = new ArrayList<>();
+    final DialogueSegment pending;
 
     Fixture(boolean completedFirst) {
       var original = store.segments(job.id()).getFirst();
@@ -38,7 +38,7 @@ class DialogueRetryTest {
                     source.sourceHash(),
                     source.createdAt(),
                     blocks));
-        pending = new Segment(1, List.of(block), original.dialogueTurns());
+        pending = new DialogueSegment(1, List.of(block), original.dialogueTurns());
       } else {
         pending = original;
         receipts.clear();
@@ -66,7 +66,7 @@ class DialogueRetryTest {
           .generate(any());
     }
 
-    List<Attempt> dialogueAttempts() {
+    List<ProviderAttempt> dialogueAttempts() {
       return saved().stream().filter(a -> a.capability().equals("dialogue")).toList();
     }
 
@@ -94,8 +94,8 @@ class DialogueRetryTest {
     assertEquals(Status.succeeded, f.job.status());
     assertEquals(
         List.of("failed", "succeeded"),
-        f.dialogueAttempts().stream().map(Attempt::outcome).toList());
-    assertEquals(List.of(1, 2), f.dialogueAttempts().stream().map(Attempt::attemptNumber).toList());
+        f.dialogueAttempts().stream().map(ProviderAttempt::outcome).toList());
+    assertEquals(List.of(1, 2), f.dialogueAttempts().stream().map(ProviderAttempt::attemptNumber).toList());
     verify(f.store, times(1)).segment(any(), any());
     var failed = f.dialogueAttempts().getFirst();
     assertTrue(failed.usageUnknown());
@@ -228,15 +228,15 @@ class DialogueRetryTest {
     var f = new Fixture(false);
     var source = f.library.revision(f.job.chapterId(), f.job.sourceRevisionId());
     var blocks = new ArrayList<ChapterSource.Block>();
-    var planned = new ArrayList<Segment>();
+    var planned = new ArrayList<DialogueSegment>();
     for (int order = 0; order < 3; order++) {
       UUID id = UUID.randomUUID();
       blocks.add(new ChapterSource.Block(id, order, "word ".repeat(800), null));
-      var turns = new ArrayList<Turn>();
+      var turns = new ArrayList<DialogueTurn>();
       for (int turn = 0; turn < 6; turn++)
-        turns.add(new Turn(turn % 2 == 0 ? Speaker.HOST : Speaker.EXPERT,
+        turns.add(new DialogueTurn(turn % 2 == 0 ? Speaker.HOST : Speaker.EXPERT,
             "Ajatus " + order + "." + turn + "."));
-      planned.add(new Segment(order, List.of(id), turns));
+      planned.add(new DialogueSegment(order, List.of(id), turns));
     }
     when(f.library.revision(f.job.chapterId(), f.job.sourceRevisionId()))
         .thenReturn(new ChapterSource(source.id(), source.bookId(), source.bookTitle(),
@@ -290,7 +290,7 @@ class DialogueRetryTest {
     f.service.workOne();
     f.textCalls(2);
     assertEquals(Status.succeeded, f.job.status());
-    assertEquals(List.of(1, 1), f.dialogueAttempts().stream().map(Attempt::attemptNumber).toList());
+    assertEquals(List.of(1, 1), f.dialogueAttempts().stream().map(ProviderAttempt::attemptNumber).toList());
     verify(f.text, never()).generate(argThat(r -> r.order() == 0));
   }
 
@@ -305,7 +305,7 @@ class DialogueRetryTest {
     when(g.text.generate(any()))
         .thenReturn(
             new TextResult(
-                new Segment(99, g.pending.coveredSourceBlockIds(), g.pending.dialogueTurns()),
+                new DialogueSegment(99, g.pending.coveredSourceBlockIds(), g.pending.dialogueTurns()),
                 AudioRetryTest.success()));
     g.service.workOne();
     g.textCalls(1);

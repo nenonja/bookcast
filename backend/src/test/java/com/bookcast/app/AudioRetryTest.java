@@ -23,16 +23,16 @@ class AudioRetryTest {
     final AudioArtifacts artifacts = mock(AudioArtifacts.class);
     boolean interruptBeforeRetry;
     final List<AudioReceipt> receipts = new ArrayList<>();
-    final Map<UUID, Attempt> attempts = new LinkedHashMap<>();
+    final Map<UUID, ProviderAttempt> attempts = new LinkedHashMap<>();
     final List<String> stages = new ArrayList<>();
-    Job job;
+    GenerationJob job;
     final GenerationService service;
-    final List<Group> groups;
+    final List<SpeechChunk> groups;
 
     Fixture() {
       UUID chapter = UUID.randomUUID(), revision = UUID.randomUUID(), block = UUID.randomUUID();
       job =
-          new Job(
+          new GenerationJob(
               UUID.randomUUID(),
               chapter,
               revision,
@@ -57,11 +57,11 @@ class AudioRetryTest {
               OffsetDateTime.now(),
               List.of(new ChapterSource.Block(block, 0, "Source.", null)));
       var segment =
-          new Segment(
+          new DialogueSegment(
               0,
               List.of(block),
-              List.of(new Turn(Speaker.HOST, "Miksi?"), new Turn(Speaker.EXPERT, "Siksi.")));
-      groups = AudioGroups.plan(List.of(segment));
+              List.of(new DialogueTurn(Speaker.HOST, "Miksi?"), new DialogueTurn(Speaker.EXPERT, "Siksi.")));
+      groups = SpeechChunkPlanner.plan(List.of(segment));
       receipts.add(receipt(groups.getFirst()));
       when(library.revision(chapter, revision)).thenReturn(source);
       when(text.profile()).thenReturn(new Profile("fake", "text"));
@@ -73,7 +73,7 @@ class AudioRetryTest {
       when(store.attempts(any())).thenAnswer(i -> List.copyOf(attempts.values()));
       doAnswer(
               i -> {
-                var a = (Attempt) i.getArgument(1);
+                var a = (ProviderAttempt) i.getArgument(1);
                 attempts.put(a.id(), a);
                 if (interruptBeforeRetry && a.nextRetryDelayMs() != null)
                   Thread.currentThread().interrupt();
@@ -92,7 +92,7 @@ class AudioRetryTest {
               i -> {
                 stages.add(i.getArgument(2));
                 job =
-                    new Job(
+                    new GenerationJob(
                         job.id(),
                         job.chapterId(),
                         job.sourceRevisionId(),
@@ -123,7 +123,7 @@ class AudioRetryTest {
               new AudioRetryPolicy(attempt -> 0L));
     }
 
-    static AudioReceipt receipt(Group group) {
+    static AudioReceipt receipt(SpeechChunk group) {
       return new AudioReceipt(group, "raw", "hash", group.text(), false, 1, 0, 0, 60);
     }
 
@@ -134,7 +134,7 @@ class AudioRetryTest {
           .render(any(), any(), any());
     }
 
-    List<Attempt> saved() {
+    List<ProviderAttempt> saved() {
       return List.copyOf(attempts.values());
     }
 
@@ -217,8 +217,8 @@ class AudioRetryTest {
     f.service.workOne();
     f.calls(2);
     assertEquals(Status.succeeded, f.job.status());
-    assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(Attempt::outcome).toList());
-    assertEquals(List.of(1, 2), f.saved().stream().map(Attempt::attemptNumber).toList());
+    assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(ProviderAttempt::outcome).toList());
+    assertEquals(List.of(1, 2), f.saved().stream().map(ProviderAttempt::attemptNumber).toList());
     verify(f.store, times(1)).audio(any(), any());
     assertTrue(f.stages.contains("audio_retry:2:2"));
     assertTrue(f.saved().stream().allMatch(a -> a.startedAt() != null && a.endedAt() != null));
@@ -274,7 +274,7 @@ class AudioRetryTest {
     f.calls(2);
     assertEquals(12L, f.saved().getFirst().nextRetryDelayMs());
     assertEquals(429, f.saved().getFirst().providerStatus());
-    assertEquals(.015, f.saved().stream().mapToDouble(Attempt::estimatedCost).sum(), 1e-9);
+    assertEquals(.015, f.saved().stream().mapToDouble(ProviderAttempt::estimatedCost).sum(), 1e-9);
   }
 
   @Test
@@ -317,8 +317,8 @@ class AudioRetryTest {
     assertEquals(6, f.saved().size());
     assertEquals(
         List.of(1, 2, 3, 1, 2, 3),
-        f.saved().stream().map(Attempt::attemptNumber).toList());
-    for (Group group : f.groups)
+        f.saved().stream().map(ProviderAttempt::attemptNumber).toList());
+    for (SpeechChunk group : f.groups)
       verify(f.speech, times(3)).render(eq(group), eq(f.job.id()), any());
   }
 
@@ -362,7 +362,7 @@ class AudioRetryTest {
     f.service.workOne();
     f.calls(2);
     assertEquals(Status.succeeded, f.job.status());
-    assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(Attempt::outcome).toList());
+    assertEquals(List.of("failed", "succeeded"), f.saved().stream().map(ProviderAttempt::outcome).toList());
     verify(f.store, times(1)).audio(any(), any());
   }
 

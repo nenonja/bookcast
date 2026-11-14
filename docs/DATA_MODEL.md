@@ -2,6 +2,8 @@
 
 Verified against Flyway V1–V3 and current adapters on 2026-11-11. Technical columns are selectively omitted.
 
+Current Java names are `GenerationJob`, `DialogueSegment`, `DialogueTurn`, `SpeechChunk`, `TurnSpan` and `ProviderAttempt`; `AudioReceipt` is unchanged. This terminology does not rename the tables, JSONB properties (`group`, `segment`, `slices`, `turn`), enum values or artifact paths. See [the Java model](DOMAIN_MODEL.md) and [checkpointed pipeline](GENERATION_FLOW.md) for the distinction between a planned chunk and accepted audio.
+
 ## Tables and relationships
 
 **PK/UK/FK** mean primary/unique/foreign key; multiple PK fields form a composite key. Solid links are enforced foreign keys: one parent per child, zero or more children per parent. Dashed links are application-validated references, **not foreign keys**; their cardinalities describe valid application data, not SQL guarantees. JSONB references are separate below.
@@ -78,7 +80,7 @@ The adapter copies segment/group orders into keys; SQL does not validate matchin
 ## Ownership and DDD boundaries
 
 - **Library:** `LibraryService` transactionally appends revisions with their blocks; initial import also creates the Chapter. Book does not own a Java Chapter collection. `ChapterSource` is a joined public snapshot with ordered blocks.
-- **Generation:** job identity scopes checkpoints and attempts, coordinated through `GenerationService`/`GenerationStore`. `Job` has no child collections; adapter `GenerationRow` does not give Spring Data ownership of checkpoint writes. No transaction spans the whole generation/provider work.
+- **Generation:** job identity scopes checkpoints and attempts, coordinated through `GenerationService`/`GenerationStore`. `GenerationJob` has no child collections; adapter `GenerationRow` does not give Spring Data ownership of checkpoint writes. No transaction spans the whole generation/provider work.
 - These are ownership/consistency boundaries, not declared Java aggregate-root classes or an ORM graph. Foreign keys alone do not define DDD aggregates. Generation reads source through the public `Library` API.
 
 ## Lifetime and recovery

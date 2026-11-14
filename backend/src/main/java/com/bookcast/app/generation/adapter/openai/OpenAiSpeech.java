@@ -217,7 +217,7 @@ public class OpenAiSpeech implements SpeechRendering {
    *     cannot be created, or a speech-configuration error from {@link #prepareGeneration(UUID)};
    *     these checks happen before transport exception handling
    */
-  public AudioResult render(Group g, UUID job, UUID attempt) {
+  public AudioResult render(SpeechChunk g, UUID job, UUID attempt) {
     prepareGeneration(job);
     Listener listener = new Listener(g, job, attempt);
     CompletableFuture<WebSocket> connection = null;
@@ -266,7 +266,7 @@ public class OpenAiSpeech implements SpeechRendering {
    * otherwise successful attempt; its safe error codes are retained separately in diagnostics.
    */
   private class Listener implements WebSocket.Listener {
-    final Group group;
+    final SpeechChunk group;
     final RealtimeAudioStructure structure =
         new RealtimeAudioStructure(limits.events(), limits.structuralEntries());
     final CompletableFuture<Void> done = new CompletableFuture<>();
@@ -282,7 +282,7 @@ public class OpenAiSpeech implements SpeechRendering {
     final OutputStream spool;
     final java.nio.file.Path folder;
 
-    Listener(Group g, UUID job, UUID attempt) {
+    Listener(SpeechChunk g, UUID job, UUID attempt) {
       group = g;
       folder = root.resolve(job.toString()).resolve(attempt.toString());
       OutputStream opened = null;

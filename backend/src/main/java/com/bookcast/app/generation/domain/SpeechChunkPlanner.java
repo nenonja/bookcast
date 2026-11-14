@@ -5,11 +5,16 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 
-public final class AudioGroups {
-  private AudioGroups() {}
+/**
+ * Partitions ordered dialogue into bounded, single-speaker speech requests without losing text.
+ * Consecutive turns may share a chunk only within one segment and the existing UTF-8 byte budget.
+ * The existing SHA-256 helpers also remain here for persisted text and PCM verification.
+ */
+public final class SpeechChunkPlanner {
+  private SpeechChunkPlanner() {}
 
-  public static List<Group> plan(List<Segment> segments) {
-    List<Group> result = new ArrayList<>();
+  public static List<SpeechChunk> plan(List<DialogueSegment> segments) {
+    List<SpeechChunk> result = new ArrayList<>();
     for (var s : segments) {
       for (int t = 0; t < s.dialogueTurns().size(); t++) {
         var turn = s.dialogueTurns().get(t);
@@ -25,7 +30,7 @@ public final class AudioGroups {
             else if (Character.isHighSurrogate(turn.text().charAt(end - 1))) end--;
           }
           String text = turn.text().substring(start, end);
-          var slice = new Slice(t, start, end);
+          var slice = new TurnSpan(t, start, end);
           if (!result.isEmpty()) {
             var old = result.getLast();
             String combined = old.text() + "\n\n" + text;
@@ -36,14 +41,14 @@ public final class AudioGroups {
               slices.add(slice);
               result.set(
                   result.size() - 1,
-                  new Group(
+                  new SpeechChunk(
                       old.order(), old.segment(), old.speaker(), combined, hash(combined), slices));
               start = end;
               continue;
             }
           }
           result.add(
-              new Group(
+              new SpeechChunk(
                   result.size(), s.order(), turn.speakerRole(), text, hash(text), List.of(slice)));
           start = end;
         }

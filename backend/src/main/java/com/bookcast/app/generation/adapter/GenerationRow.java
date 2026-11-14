@@ -31,8 +31,8 @@ record GenerationRow(
     String audioPath,
     OffsetDateTime createdAt) {
 
-  Job toJob() {
-    return new Job(id, chapterId, revisionId, status, stage, totalSegments, totalAudio,
+  GenerationJob toGenerationJob() {
+    return new GenerationJob(id, chapterId, revisionId, status, stage, totalSegments, totalAudio,
         generationModel, audioModel, errorCode, retryable, audioPath);
   }
 }

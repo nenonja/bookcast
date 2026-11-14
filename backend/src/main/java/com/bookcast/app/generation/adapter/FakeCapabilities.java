@@ -34,12 +34,12 @@ public class FakeCapabilities {
 
       public TextResult generate(TextRequest r) {
         return new TextResult(
-            new Segment(
+            new DialogueSegment(
                 r.order(),
                 r.blocks().stream().map(b -> b.id()).toList(),
                 List.of(
-                    new Turn(Speaker.HOST, "Mikä tässä on olennaista?"),
-                    new Turn(
+                    new DialogueTurn(Speaker.HOST, "Mikä tässä on olennaista?"),
+                    new DialogueTurn(
                         Speaker.EXPERT,
                         "Tämä on maksuton paikallinen esikatselu. Oikea generaattori käsittelee lähteen tässä kohdassa."))),
             new Metadata(Map.of(), 0.0, null, false));
@@ -51,7 +51,7 @@ public class FakeCapabilities {
    * Supplies a 440 Hz test tone as signed 16-bit little-endian mono PCM at 24,000 Hz. Duration is at
    * least six seconds, increasing with the script's whitespace-separated word count at two words per
    * second. The returned transcript is the supplied group text, rather than a measured transcription.
-   * Job and attempt IDs do not affect rendering, and this capability writes no attempt files itself.
+   * GenerationJob and attempt IDs do not affect rendering, and this capability writes no attempt files itself.
    *
    * @return local audio generation with the {@code fake-audio} model profile
    */
@@ -62,7 +62,7 @@ public class FakeCapabilities {
         return new Profile("fake", "fake-audio");
       }
 
-      public AudioResult render(Group g, UUID job, UUID attempt) {
+      public AudioResult render(SpeechChunk g, UUID job, UUID attempt) {
         int samples = Math.max(24000 * 6, g.text().split("\\s+").length * 24000 / 2);
         var buffer = ByteBuffer.allocate(samples * 2).order(ByteOrder.LITTLE_ENDIAN);
         for (int i = 0; i < samples; i++)

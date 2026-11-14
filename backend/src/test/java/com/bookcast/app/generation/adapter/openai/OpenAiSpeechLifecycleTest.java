@@ -98,7 +98,7 @@ class OpenAiSpeechLifecycleTest {
 
     AudioResult render() {
       return adapter.render(
-          new Group(0, 0, speaker, "Selitys.", "hash", List.of()), job, attempt);
+          new SpeechChunk(0, 0, speaker, "Selitys.", "hash", List.of()), job, attempt);
     }
 
     JsonNode diagnostics() throws IOException {

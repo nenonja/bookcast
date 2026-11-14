@@ -1,0 +1,18 @@
+{
+  "group": {
+    "order": 0,
+    "segment": 0,
+    "speaker": "HOST",
+    "text": "Mistä aloitetaan?",
+    "textHash": "06eb14d566967a4ebf169add5abaf10db9f631c98ee3ae78ad58ec409280c11b",
+    "slices": [{"turn": 0, "start": 0, "end": 17}]
+  },
+  "path": "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/raw.pcm",
+  "hash": "415034034e7afa2514d9229943fd02f96885d8c05b6323fedc7ad4c79578bc6d",
+  "transcript": "Mistä aloitetaan?",
+  "lexicalDeviation": false,
+  "duration": 6.0,
+  "longestInternalSilence": 0.0,
+  "trailingSilence": 0.0,
+  "wordsPerMinute": 20.0
+}

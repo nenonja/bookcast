@@ -124,7 +124,7 @@ class RealtimeAudioStructureTest {
     UUID job = UUID.randomUUID(), attempt = UUID.randomUUID();
     var result =
         adapter.render(
-            new Group(0, 0, Speaker.EXPERT, "SOURCE_PRIVATE", "hash", List.of()), job, attempt);
+            new SpeechChunk(0, 0, Speaker.EXPERT, "SOURCE_PRIVATE", "hash", List.of()), job, attempt);
     var folder = data.resolve(job.toString()).resolve(attempt.toString());
     verify(builder, times(1)).buildAsync(any(), any());
     verify(socket).abort();
@@ -349,7 +349,7 @@ class RealtimeAudioStructureTest {
     UUID job = UUID.randomUUID(), attempt = UUID.randomUUID();
     var result =
         adapter.render(
-            new Group(0, 0, Speaker.EXPERT, "SOURCE_PRIVATE", "hash", List.of()), job, attempt);
+            new SpeechChunk(0, 0, Speaker.EXPERT, "SOURCE_PRIVATE", "hash", List.of()), job, attempt);
     assertEquals("API_KEY_MISSING", result.metadata().errorCode());
     verifyNoInteractions(http);
     var diagnostics =

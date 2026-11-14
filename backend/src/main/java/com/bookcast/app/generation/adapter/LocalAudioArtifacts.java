@@ -2,7 +2,7 @@ package com.bookcast.app.generation.adapter;
 
 import com.bookcast.app.generation.application.Capabilities.AudioArtifacts;
 import com.bookcast.app.generation.application.Capabilities.AudioMetadata;
-import com.bookcast.app.generation.domain.AudioGroups;
+import com.bookcast.app.generation.domain.SpeechChunkPlanner;
 import com.bookcast.app.generation.domain.Podcast.*;
 import java.io.*;
 import java.nio.*;
@@ -17,7 +17,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Raw audio is signed 16-bit little-endian mono PCM at 24,000 Hz. Stored references are relative
  * to the normalized data directory; resolution rejects lexical traversal outside that directory.
- * Attempt files use exclusive creation, and assembly uses fresh filenames, leaving prior raw files,
+ * ProviderAttempt files use exclusive creation, and assembly uses fresh filenames, leaving prior raw files,
  * checkpoints and completed media in place even when a later operation fails. Writes are not a
  * filesystem transaction, so a failed operation can leave partial diagnostic/output files.
  *
@@ -85,7 +85,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    * @throws IllegalArgumentException with {@code INVALID_PCM} for size/alignment failure, or
    *     {@code INVALID_AUDIO_WAVEFORM} for a failed plausibility gate
    */
-  public static AudioReceipt waveform(Group group, byte[] bytes, String path, String transcript) {
+  public static AudioReceipt waveform(SpeechChunk group, byte[] bytes, String path, String transcript) {
     if (bytes.length < 4800 || bytes.length % 2 != 0)
       throw new IllegalArgumentException("INVALID_PCM");
     var b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -113,7 +113,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
     return new AudioReceipt(
         group,
         path,
-        AudioGroups.hash(bytes),
+        SpeechChunkPlanner.hash(bytes),
         transcript,
         lexical,
         duration,
@@ -127,7 +127,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
   }
 
   /**
-   * Loads a preserved PCM file and applies {@link #waveform(Group, byte[], String, String)}. Path and
+   * Loads a preserved PCM file and applies {@link #waveform(SpeechChunk, byte[], String, String)}. Path and
    * waveform errors propagate; a file-read I/O failure becomes {@code ARTIFACT_MISSING}.
    *
    * @param group non-null planned group to associate with the receipt
@@ -137,7 +137,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    * @throws IllegalStateException if the PCM cannot be read
    * @throws IllegalArgumentException for a rejected reference or invalid PCM/waveform
    */
-  public AudioReceipt validate(Group group, String reference, String transcript) {
+  public AudioReceipt validate(SpeechChunk group, String reference, String transcript) {
     try {
       return waveform(group, Files.readAllBytes(path(reference)), reference, transcript);
     } catch (IOException e) {
@@ -156,7 +156,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    */
   public void verify(AudioReceipt receipt) {
     try {
-      if (!AudioGroups.hash(Files.readAllBytes(path(receipt.path()))).equals(receipt.hash()))
+      if (!SpeechChunkPlanner.hash(Files.readAllBytes(path(receipt.path()))).equals(receipt.hash()))
         throw new IllegalStateException("ARTIFACT_HASH_MISMATCH");
     } catch (IOException e) {
       throw new IllegalStateException("ARTIFACT_MISSING");
@@ -279,7 +279,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
               "-"));
       Files.writeString(
           folder.resolve(m4a.getFileName() + ".sha256"),
-          AudioGroups.hash(Files.readAllBytes(m4a)),
+          SpeechChunkPlanner.hash(Files.readAllBytes(m4a)),
           StandardOpenOption.CREATE_NEW);
       return root.relativize(m4a).toString();
     } catch (IOException e) {

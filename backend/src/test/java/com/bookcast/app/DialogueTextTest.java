@@ -16,16 +16,16 @@ class DialogueTextTest {
       for (String prefix : List.of("%s: ", "%s : ", "**%s:** ", "**%s**: ", "%s — ", "%s - ")) {
         assertEquals(
             "Hei",
-            DialogueText.normalize(new Turn(speaker, prefix.formatted(speaker) + "Hei")).text());
+            DialogueText.normalize(new DialogueTurn(speaker, prefix.formatted(speaker) + "Hei")).text());
       }
     }
     assertEquals(
-        "Selitys", DialogueText.normalize(new Turn(Speaker.EXPERT, "EXPERT — Selitys")).text());
+        "Selitys", DialogueText.normalize(new DialogueTurn(Speaker.EXPERT, "EXPERT — Selitys")).text());
   }
 
   @Test
   void leadingWhitespaceIsHandled() {
-    assertEquals("Hei", DialogueText.normalize(new Turn(Speaker.HOST, " \n\t HOST : Hei")).text());
+    assertEquals("Hei", DialogueText.normalize(new DialogueTurn(Speaker.HOST, " \n\t HOST : Hei")).text());
   }
 
   @Test
@@ -37,7 +37,7 @@ class DialogueTextTest {
             "HOST on rooli.",
             "Esimerkki: HOST: Hei",
             "  Tavallinen teksti.")) {
-      var turn = new Turn(Speaker.HOST, text);
+      var turn = new DialogueTurn(Speaker.HOST, text);
       assertSame(turn, DialogueText.normalize(turn));
     }
   }
@@ -48,7 +48,7 @@ class DialogueTextTest {
       String other = speaker == Speaker.HOST ? "EXPERT" : "HOST";
       assertThrows(
           DialogueText.SpeakerMismatch.class,
-          () -> DialogueText.normalize(new Turn(speaker, "**" + other + "**: Hei")));
+          () -> DialogueText.normalize(new DialogueTurn(speaker, "**" + other + "**: Hei")));
     }
   }
 
@@ -56,16 +56,16 @@ class DialogueTextTest {
   void prefixWithoutSpeechCannotBeAccepted() {
     assertThrows(
         IllegalArgumentException.class,
-        () -> DialogueText.normalize(new Turn(Speaker.HOST, "HOST: ")));
+        () -> DialogueText.normalize(new DialogueTurn(Speaker.HOST, "HOST: ")));
   }
 
-  private Segment freshSegment(AudioRetryTest.Fixture f, String host) {
+  private DialogueSegment freshSegment(AudioRetryTest.Fixture f, String host) {
     // Fixture source identity comes from the existing persisted segment.
     var original = f.store.segments(f.job.id()).getFirst();
-    return new Segment(
+    return new DialogueSegment(
         0,
         original.coveredSourceBlockIds(),
-        List.of(new Turn(Speaker.HOST, host), new Turn(Speaker.EXPERT, "EXPERT — Siksi.")));
+        List.of(new DialogueTurn(Speaker.HOST, host), new DialogueTurn(Speaker.EXPERT, "EXPERT — Siksi.")));
   }
 
   @Test

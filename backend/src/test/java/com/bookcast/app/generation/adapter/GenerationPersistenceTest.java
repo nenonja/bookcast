@@ -3,7 +3,7 @@ package com.bookcast.app.generation.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.bookcast.app.generation.application.GenerationStore;
-import com.bookcast.app.generation.domain.AudioGroups;
+import com.bookcast.app.generation.domain.SpeechChunkPlanner;
 import com.bookcast.app.generation.domain.Podcast.*;
 import com.bookcast.app.library.Library;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -48,17 +48,17 @@ class GenerationPersistenceTest {
   @Autowired Library library;
   @Autowired ObjectMapper json;
 
-  Job create() {
+  GenerationJob create() {
     return store.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "text", "audio");
   }
 
-  Segment segment() {
-    return new Segment(0, List.of(UUID.randomUUID()),
-        List.of(new Turn(Speaker.HOST, "Miksi?"), new Turn(Speaker.EXPERT, "Siksi.")));
+  DialogueSegment segment() {
+    return new DialogueSegment(0, List.of(UUID.randomUUID()),
+        List.of(new DialogueTurn(Speaker.HOST, "Miksi?"), new DialogueTurn(Speaker.EXPERT, "Siksi.")));
   }
 
-  AudioReceipt receipt(Segment segment) {
-    Group group = AudioGroups.plan(List.of(segment)).getFirst();
+  AudioReceipt receipt(DialogueSegment segment) {
+    SpeechChunk group = SpeechChunkPlanner.plan(List.of(segment)).getFirst();
     return new AudioReceipt(group, "fixture/raw.pcm", "accepted-hash", group.text(), false, 1, 0, 0, 60);
   }
 
@@ -83,14 +83,14 @@ class GenerationPersistenceTest {
           values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           """, id, request, chapter, revision, status.name(), "fixture", 3, 5,
           "text-override", "audio-override", error, retryable, path, created);
-      var expected = new Job(id, chapter, revision, status, "fixture", 3, 5,
+      var expected = new GenerationJob(id, chapter, revision, status, "fixture", 3, 5,
           "text-override", "audio-override", error, retryable, path);
       assertEquals(expected, store.get(id));
       var row = reads.findByRequestId(request).orElseThrow();
       assertEquals(request, row.requestId());
       assertEquals(created.toInstant(), row.createdAt().toInstant());
       assertEquals(ZoneOffset.UTC, row.createdAt().getOffset());
-      assertEquals(expected, row.toJob());
+      assertEquals(expected, row.toGenerationJob());
     }
     assertEquals(4, store.list(chapter).size());
     assertThrows(NoSuchElementException.class, () -> store.get(UUID.randomUUID()));
@@ -103,7 +103,7 @@ class GenerationPersistenceTest {
     UUID low = UUID.fromString("00000000-0000-0000-0000-000000000001");
     UUID high = UUID.fromString("00000000-0000-0000-0000-000000000002");
     var time = OffsetDateTime.parse("2026-10-01T12:00:00Z");
-    Job older = create();
+    GenerationJob older = create();
     db.update("update generations set chapter_id=?,created_at=? where id=?", chapter, time.minusDays(1), older.id());
     for (UUID id : List.of(low, high))
       db.update("""
@@ -111,7 +111,7 @@ class GenerationPersistenceTest {
               generation_model,audio_model,created_at) values (?,?,?,?,'succeeded','complete','text','audio',?)
           """, id, UUID.randomUUID(), chapter, UUID.randomUUID(), time);
     for (int i = 0; i < 3; i++)
-      assertEquals(List.of(high, low, older.id()), store.list(chapter).stream().map(Job::id).toList());
+      assertEquals(List.of(high, low, older.id()), store.list(chapter).stream().map(GenerationJob::id).toList());
   }
 
   @Test
@@ -131,7 +131,7 @@ class GenerationPersistenceTest {
       assertNotNull(TransactionSynchronizationManager.getResource(dataSource));
       var job = store.create(request, UUID.randomUUID(), UUID.randomUUID(), "text", "audio");
       id[0] = job.id();
-      assertEquals(job, reads.findById(job.id()).orElseThrow().toJob());
+      assertEquals(job, reads.findById(job.id()).orElseThrow().toGenerationJob());
       store.state(job.id(), "failed", "audio", "PROVIDER_TIMEOUT", true, null);
       assertEquals("PROVIDER_TIMEOUT", reads.findById(job.id()).orElseThrow().errorCode());
       tx.setRollbackOnly();
@@ -156,7 +156,7 @@ class GenerationPersistenceTest {
     var job = create();
     var segment = segment();
     var receipt = receipt(segment);
-    var attempt = new Attempt(UUID.randomUUID(), "audio", "group-0", "fixture", "audio",
+    var attempt = new ProviderAttempt(UUID.randomUUID(), "audio", "group-0", "fixture", "audio",
         "failed", 10, Map.of("inputTokens", 10L), .005, false, "PROVIDER_QUOTA");
     store.segment(job.id(), segment);
     store.audio(job.id(), receipt);
@@ -193,11 +193,11 @@ class GenerationPersistenceTest {
   void jsonbUpsertsRetainPartialUsageUnknownCostAndActualZero() throws Exception {
     var job = create();
     UUID id = UUID.randomUUID();
-    var pending = new Attempt(id, "audio", "group-0", "fixture", "audio", "attempting",
+    var pending = new ProviderAttempt(id, "audio", "group-0", "fixture", "audio", "attempting",
         0, Map.of("inputTokens", 10L), null, false, null);
     store.attempt(job.id(), pending);
     assertEquals(List.of(pending), store.attempts(job.id()));
-    var complete = new Attempt(id, "audio", "group-0", "fixture", "audio", "failed",
+    var complete = new ProviderAttempt(id, "audio", "group-0", "fixture", "audio", "failed",
         17, Map.of("inputTokens", 10L, "outputTokens", 0L), 0.0, false, "PROVIDER_QUOTA");
     store.attempt(job.id(), complete);
     assertEquals(List.of(complete), store.attempts(job.id()));
@@ -206,7 +206,7 @@ class GenerationPersistenceTest {
     var raw = json.readTree(db.queryForObject("select payload::text from generation_attempts where id=?", String.class, id));
     assertEquals(0.0, raw.path("estimatedCost").doubleValue());
     assertEquals(0, raw.path("usage").path("outputTokens").longValue());
-    var unknown = new Attempt(UUID.randomUUID(), "audio", "group-1", "fixture", "audio", "failed",
+    var unknown = new ProviderAttempt(UUID.randomUUID(), "audio", "group-1", "fixture", "audio", "failed",
         3, Map.of("inputTokens", 5L), null, true, "PROVIDER_TIMEOUT");
     store.attempt(job.id(), unknown);
     var savedUnknown = store.attempts(job.id()).stream()
@@ -224,7 +224,7 @@ class GenerationPersistenceTest {
     var receipt = receipt(segment);
     store.segment(job.id(), segment);
     store.audio(job.id(), receipt);
-    var pending = new Attempt(UUID.randomUUID(), "audio", "group-1", "fixture", "audio", "attempting",
+    var pending = new ProviderAttempt(UUID.randomUUID(), "audio", "group-1", "fixture", "audio", "attempting",
         1, Map.of("inputTokens", 11L), .005, false, null);
     store.attempt(job.id(), pending);
     assertEquals(Status.running, reads.findById(job.id()).orElseThrow().status());
@@ -242,6 +242,28 @@ class GenerationPersistenceTest {
     assertNotNull(attempt.endedAt());
     assertEquals(List.of(segment), store.segments(job.id()));
     assertEquals(List.of(receipt), store.audio(job.id()));
+  }
+
+  @Test
+  void legacyJsonbCheckpointsAndAttemptsLoadThroughTheStoreWithoutRewriting() throws Exception {
+    var job = create();
+    String segmentJson = GenerationJsonCompatibilityTest.fixture("legacy-dialogue-segment.json");
+    String audioJson = GenerationJsonCompatibilityTest.fixture("legacy-audio-receipt.json");
+    String attemptJson = GenerationJsonCompatibilityTest.fixture("legacy-provider-attempt.json");
+    var attemptId = UUID.fromString(json.readTree(attemptJson).path("id").asText());
+    db.update("insert into script_segments values (?,?,?::jsonb)", job.id(), 0, segmentJson);
+    db.update("insert into audio_groups values (?,?,?::jsonb)", job.id(), 0, audioJson);
+    db.update("insert into generation_attempts values (?,?,?::jsonb)", attemptId, job.id(), attemptJson);
+    assertEquals(json.readValue(segmentJson, DialogueSegment.class), store.segments(job.id()).getFirst());
+    assertEquals(json.readValue(audioJson, AudioReceipt.class), store.audio(job.id()).getFirst());
+    assertEquals(json.readValue(attemptJson, ProviderAttempt.class), store.attempts(job.id()).getFirst());
+    for (String table : List.of("script_segments", "audio_groups", "generation_attempts")) {
+      String original = table.equals("script_segments") ? segmentJson
+          : table.equals("audio_groups") ? audioJson : attemptJson;
+      var saved = db.queryForObject("select payload::text from " + table + " where generation_id=?",
+          String.class, job.id());
+      assertEquals(json.readTree(original), json.readTree(saved));
+    }
   }
 
   @Test

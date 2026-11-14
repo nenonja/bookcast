@@ -12,7 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Stores generation state, accepted checkpoints and attempt snapshots in PostgreSQL.
  *
- * <p>Job columns describe current progress; segments, audio receipts and attempts use JSON payloads.
+ * <p>GenerationJob columns describe current progress; segments, audio receipts and attempts use JSON
+ * payloads.
  * Accepted checkpoints are insert-only here and protected against updates/deletion by migration
  * triggers. An attempt instead replaces its payload as it moves from pending to a final outcome;
  * callers assign a fresh ID for each separate provider attempt, preserving paid-attempt history.
@@ -42,8 +43,8 @@ public class JdbcGenerationStore implements GenerationStore {
     this.reads = reads;
   }
 
-  private Job row(java.sql.ResultSet r) throws java.sql.SQLException {
-    return JOB_ROWS.mapRow(r, 0).toJob();
+  private GenerationJob row(java.sql.ResultSet r) throws java.sql.SQLException {
+    return JOB_ROWS.mapRow(r, 0).toGenerationJob();
   }
 
   /**
@@ -65,7 +66,7 @@ public class JdbcGenerationStore implements GenerationStore {
    *     rejected insert cannot be resolved to a prior request or currently active job
    */
   @Transactional
-  public Job create(UUID request, UUID chapter, UUID revision, String text, String audio) {
+  public GenerationJob create(UUID request, UUID chapter, UUID revision, String text, String audio) {
     UUID id = UUID.randomUUID();
     db.update(
         "insert into generations(id,request_id,chapter_id,revision_id,status,stage,generation_model,audio_model) values (?,?,?,?,'queued','queued',?,?) on conflict do nothing",
@@ -77,23 +78,23 @@ public class JdbcGenerationStore implements GenerationStore {
         audio);
     var existing = reads.findByRequestId(request);
     if (existing.isPresent()) {
-      var j = existing.get().toJob();
+      var j = existing.get().toGenerationJob();
       if (!j.chapterId().equals(chapter) || !j.sourceRevisionId().equals(revision))
         throw new IllegalStateException("IDEMPOTENCY_CONFLICT");
       return j;
     }
     var rows = reads.findByRevisionIdAndStatusIn(revision, List.of(Status.queued, Status.running));
     if (rows.isEmpty()) throw new IllegalStateException("GENERATION_CONFLICT");
-    return rows.getFirst().toJob();
+    return rows.getFirst().toGenerationJob();
   }
 
-  public Job get(UUID id) {
-    return reads.findById(id).map(GenerationRow::toJob).orElseThrow(NoSuchElementException::new);
+  public GenerationJob get(UUID id) {
+    return reads.findById(id).map(GenerationRow::toGenerationJob).orElseThrow(NoSuchElementException::new);
   }
 
-  public List<Job> list(UUID chapter) {
-    var jobs = new ArrayList<Job>();
-    reads.findByChapterIdOrderByCreatedAtDescIdDesc(chapter).forEach(row -> jobs.add(row.toJob()));
+  public List<GenerationJob> list(UUID chapter) {
+    var jobs = new ArrayList<GenerationJob>();
+    reads.findByChapterIdOrderByCreatedAtDescIdDesc(chapter).forEach(row -> jobs.add(row.toGenerationJob()));
     return jobs;
   }
 
@@ -105,7 +106,7 @@ public class JdbcGenerationStore implements GenerationStore {
    *
    * @return the updated job, or empty when no unlocked queued job is available
    */
-  public Optional<Job> claim() {
+  public Optional<GenerationJob> claim() {
     return db
         .query(
             "update generations set status='running',stage='dialogue' where id=(select id from generations where status='queued' order by created_at limit 1 for update skip locked) returning *",
@@ -189,14 +190,14 @@ public class JdbcGenerationStore implements GenerationStore {
     }
   }
 
-  public List<Segment> segments(UUID id) {
+  public List<DialogueSegment> segments(UUID id) {
     return db.query(
         "select payload::text from script_segments where generation_id=? order by segment_order",
-        (r, n) -> decode(r.getString(1), Segment.class),
+        (r, n) -> decode(r.getString(1), DialogueSegment.class),
         id);
   }
 
-  public void segment(UUID id, Segment segment) {
+  public void segment(UUID id, DialogueSegment segment) {
     db.update(
         "insert into script_segments values (?,?,?::jsonb)", id, segment.order(), encode(segment));
   }
@@ -225,7 +226,7 @@ public class JdbcGenerationStore implements GenerationStore {
    * @param job non-null owning generation ID for a new attempt
    * @param attempt non-null snapshot whose ID identifies one call throughout its lifecycle
    */
-  public void attempt(UUID job, Attempt attempt) {
+  public void attempt(UUID job, ProviderAttempt attempt) {
     db.update(
         "insert into generation_attempts values (?,?,?::jsonb) on conflict (id) do update set payload=excluded.payload",
         attempt.id(),
@@ -240,10 +241,10 @@ public class JdbcGenerationStore implements GenerationStore {
    * @param id non-null generation ID
    * @return decoded snapshots, or an empty list when no rows match
    */
-  public List<Attempt> attempts(UUID id) {
+  public List<ProviderAttempt> attempts(UUID id) {
     return db.query(
         "select payload::text from generation_attempts where generation_id=?",
-        (r, n) -> decode(r.getString(1), Attempt.class),
+        (r, n) -> decode(r.getString(1), ProviderAttempt.class),
         id);
   }
 }

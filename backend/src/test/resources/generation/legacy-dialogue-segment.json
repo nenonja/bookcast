@@ -1,0 +1,14 @@
+{
+  "order": 0,
+  "coveredSourceBlockIds": [
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002",
+    "00000000-0000-4000-8000-000000000003"
+  ],
+  "dialogueTurns": [
+    {"speakerRole": "HOST", "text": "Mistä aloitetaan?"},
+    {"speakerRole": "EXPERT", "text": "Lähde jaetaan osiin."},
+    {"speakerRole": "EXPERT", "text": "Valmiit osat säilyvät."},
+    {"speakerRole": "HOST", "text": "Mitä jos yhteys katkeaa?"}
+  ]
+}

@@ -78,7 +78,7 @@ class ProductFlowTest {
       return delegate.profile();
     }
 
-    public AudioResult render(Group g, UUID job, UUID attempt) {
+    public AudioResult render(SpeechChunk g, UUID job, UUID attempt) {
       calls++;
       if (fail && g.order() == 1) {
         fail = false;
@@ -145,7 +145,7 @@ class ProductFlowTest {
     assertEquals(originalAudio.size(), service.audio(fresh).size());
     assertTrue(service.audio(fresh).stream().allMatch(receipt -> receipt.path().startsWith(fresh + "/")));
     assertEquals(originalAttempts.size(), service.attempts(fresh).size());
-    var originalAttemptIds = originalAttempts.stream().map(Attempt::id).toList();
+    var originalAttemptIds = originalAttempts.stream().map(ProviderAttempt::id).toList();
     assertTrue(service.attempts(fresh).stream().noneMatch(attempt -> originalAttemptIds.contains(attempt.id())));
     assertEquals(originalJob, service.get(original));
     assertEquals(originalSegments, service.segments(original));
@@ -156,11 +156,84 @@ class ProductFlowTest {
     assertEquals(chapter, library.revision(chapter.id(), chapter.sourceRevisionId()));
     assertEquals(1, db.queryForObject("select count(*) from source_revisions where chapter_id=?",
         Integer.class, chapter.id()));
-    assertEquals(Set.of(original, fresh), new HashSet<>(service.list(chapter.id()).stream().map(Job::id).toList()));
+    assertEquals(Set.of(original, fresh), new HashSet<>(service.list(chapter.id()).stream().map(GenerationJob::id).toList()));
     mvc.perform(get("/api/v1/generations/" + original + "/audio"))
         .andExpect(status().isOk()).andExpect(content().bytes(originalBytes));
     mvc.perform(get("/api/v1/generations/" + original + "/audio/download"))
         .andExpect(status().isOk()).andExpect(content().bytes(originalBytes));
+  }
+
+  @Test
+  void legacyDialogueAndAudioResumeWithoutRepeatingAcceptedWorkAndAssembleInOrder() throws Exception {
+    var chapter = library.importChapter(library.createBook("Legacy fixture").id(), 1,
+        "Saved checkpoint fixture", "First source block.\n\nSecond source block.\n\nThird source block.", "en");
+    var job = service.start(chapter.id(), chapter.sourceRevisionId(), UUID.randomUUID());
+    var segment = legacyJson("legacy-dialogue-segment.json");
+    segment.set("coveredSourceBlockIds", json.valueToTree(chapter.blocks().stream().map(b -> b.id()).toList()));
+    var receipt = legacyJson("legacy-audio-receipt.json");
+    String pcmReference = job.id() + "/" + UUID.randomUUID() + "/raw.pcm";
+    receipt.put("path", pcmReference);
+    Path pcmFile = data.resolve(pcmReference);
+    Files.createDirectories(pcmFile.getParent());
+    var pcm = java.nio.ByteBuffer.allocate(24000 * 2 * 6).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    while (pcm.hasRemaining()) pcm.putShort((short) 1800);
+    Files.write(pcmFile, pcm.array());
+    var modified = Files.getLastModifiedTime(pcmFile);
+    var attempt = legacyJson("legacy-provider-attempt.json");
+    UUID attemptId = UUID.randomUUID();
+    attempt.put("id", attemptId.toString());
+    db.update("insert into script_segments values (?,?,?::jsonb)", job.id(), 0, segment.toString());
+    db.update("insert into audio_groups values (?,?,?::jsonb)", job.id(), 0, receipt.toString());
+    db.update("insert into generation_attempts values (?,?,?::jsonb)", attemptId, job.id(), attempt.toString());
+    var savedDialogue = service.segments(job.id());
+    var savedReceipt = service.audio(job.id()).getFirst();
+    var savedAttempt = service.attempts(job.id()).getFirst();
+    assertEquals(job.id(), store.claim().orElseThrow().id());
+    store.totals(job.id(), 1, 3);
+    service.interrupted();
+    assertEquals(Status.failed, service.get(job.id()).status());
+    assertTrue(store.claim().isEmpty());
+
+    int calls = speech.calls;
+    service.retry(job.id());
+    assertTrue(service.workOne());
+    assertEquals(Status.succeeded, service.get(job.id()).status());
+    assertEquals(calls + 2, speech.calls, "only the two missing chunks need speech calls");
+    assertEquals(savedDialogue, service.segments(job.id()));
+    var receipts = service.audio(job.id());
+    assertEquals(List.of(0, 1, 2), receipts.stream().map(r -> r.group().order()).toList());
+    assertEquals(savedReceipt, receipts.getFirst());
+    assertEquals(modified, Files.getLastModifiedTime(pcmFile));
+    assertArrayEquals(pcm.array(), Files.readAllBytes(pcmFile));
+    var attempts = service.attempts(job.id());
+    assertEquals(3, attempts.size());
+    assertTrue(attempts.stream().allMatch(a -> a.capability().equals("audio")), "saved dialogue makes no text call");
+    assertEquals(savedAttempt, attempts.stream().filter(a -> a.id().equals(attemptId)).findFirst().orElseThrow());
+    assertEquals(2, attempts.stream().filter(a -> a.outcome().equals("succeeded")).count());
+    var expectedPcm = new java.io.ByteArrayOutputStream();
+    for (int i = 0; i < receipts.size(); i++) {
+      expectedPcm.write(Files.readAllBytes(data.resolve(receipts.get(i).path())));
+      if (i + 1 < receipts.size()) expectedPcm.write(new byte[16800]);
+    }
+    try (var files = Files.list(data.resolve(job.id().toString()))) {
+      Path assembled = files.filter(p -> p.getFileName().toString().startsWith("assembled-")).findFirst().orElseThrow();
+      assertArrayEquals(expectedPcm.toByteArray(), Files.readAllBytes(assembled));
+    }
+    mvc.perform(get("/api/v1/generations/" + job.id()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.completedSegments").value(1))
+        .andExpect(jsonPath("$.completedAudioGroups").value(3))
+        .andExpect(jsonPath("$.scriptSegments[0].dialogueTurns[0].speakerRole").value("HOST"))
+        .andExpect(jsonPath("$.totalEstimatedCost").value(savedAttempt.estimatedCost()));
+    mvc.perform(get("/api/v1/generations/" + job.id() + "/audio/download"))
+        .andExpect(status().isOk()).andExpect(header().string("Content-Type", "audio/mp4"));
+  }
+
+  private com.fasterxml.jackson.databind.node.ObjectNode legacyJson(String name) throws Exception {
+    try (var input = getClass().getResourceAsStream("/generation/" + name)) {
+      assertNotNull(input);
+      return (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(input);
+    }
   }
 
   @Test
@@ -267,7 +340,7 @@ class ProductFlowTest {
     assertEquals(interrupted.id(), store.claim().orElseThrow().id());
     store.attempt(
         interrupted.id(),
-        new Attempt(
+        new ProviderAttempt(
             UUID.randomUUID(),
             "audio",
             "group-1",

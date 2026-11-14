@@ -17,16 +17,22 @@ public final class Podcast {
     failed
   }
 
+  /** One speaker's contribution; a candidate turn must contain nonblank spoken text. */
   @org.jmolecules.ddd.annotation.ValueObject
-  public record Turn(Speaker speakerRole, String text) {
-    public Turn {
+  public record DialogueTurn(Speaker speakerRole, String text) {
+    public DialogueTurn {
       if (speakerRole == null || text == null || text.isBlank())
         throw new IllegalArgumentException("DIALOGUE_CONTENT");
     }
   }
 
-  public record Segment(int order, List<UUID> coveredSourceBlockIds, List<Turn> dialogueTurns) {
-    public Segment {
+  /**
+   * Dialogue for an ordered source unit. Providers return this same value type as a candidate;
+   * validation and insert-only persistence establish acceptance. Source IDs remain in source order.
+   */
+  public record DialogueSegment(
+      int order, List<UUID> coveredSourceBlockIds, List<DialogueTurn> dialogueTurns) {
+    public DialogueSegment {
       coveredSourceBlockIds = List.copyOf(coveredSourceBlockIds);
       dialogueTurns = List.copyOf(dialogueTurns);
       if (dialogueTurns.isEmpty()) throw new IllegalArgumentException("EMPTY_SCRIPT");
@@ -35,22 +41,32 @@ public final class Podcast {
     public void validate(int expected, List<UUID> ids) {
       if (order != expected || !coveredSourceBlockIds.equals(ids))
         throw new IllegalArgumentException("SOURCE_COVERAGE");
-      if (dialogueTurns.stream().map(Turn::speakerRole).distinct().count() != 2)
+      if (dialogueTurns.stream().map(DialogueTurn::speakerRole).distinct().count() != 2)
         throw new IllegalArgumentException("BOTH_SPEAKERS_REQUIRED");
     }
   }
 
-  public record Slice(int turn, int start, int end) {}
+  /**
+   * Dialogue-segment-local turn index and UTF-16 text offsets, with an exclusive end. The legacy JSON
+   * property {@code turn} remains unchanged; offsets refer to the turn, not the combined chunk.
+   */
+  public record TurnSpan(int turn, int start, int end) {}
 
-  public record Group(
-      int order, int segment, Speaker speaker, String text, String textHash, List<Slice> slices) {
-    public Group {
+  /**
+   * Planned speech for one speaker in one dialogue segment, before audio acceptance. The global
+   * order, segment ordinal and contributing spans preserve the original dialogue. Legacy JSON
+   * names {@code segment} and {@code slices} are retained for persisted checkpoints and diagnostics.
+   */
+  public record SpeechChunk(
+      int order, int segment, Speaker speaker, String text, String textHash, List<TurnSpan> slices) {
+    public SpeechChunk {
       slices = List.copyOf(slices);
     }
   }
 
+  /** Accepted audio evidence. The persisted {@code group} property contains its planned chunk. */
   public record AudioReceipt(
-      Group group,
+      SpeechChunk group,
       String path,
       String hash,
       String transcript,
@@ -60,7 +76,11 @@ public final class Podcast {
       double trailingSilence,
       double wordsPerMinute) {}
 
-  public record Attempt(
+  /**
+   * One provider call, not a whole pipeline run. Its ID survives pending/final outcome updates;
+   * another call gets another ID. Available usage and nullable estimated cost survive failures.
+   */
+  public record ProviderAttempt(
       UUID id,
       String capability,
       String unitKey,
@@ -80,7 +100,7 @@ public final class Podcast {
       Integer providerStatus,
       String providerCode,
       Long nextRetryDelayMs) {
-    public Attempt(
+    public ProviderAttempt(
         UUID id,
         String capability,
         String unitKey,
@@ -114,12 +134,16 @@ public final class Podcast {
           null);
     }
 
-    public Attempt {
+    public ProviderAttempt {
       usage = Map.copyOf(usage);
     }
   }
 
-  public record Job(
+  /**
+   * Snapshot of the overall pipeline's persisted lifecycle. The service coordinates execution;
+   * accepted dialogue, audio and attempts are separate store lookups, not child collections here.
+   */
+  public record GenerationJob(
       UUID id,
       UUID chapterId,
       UUID sourceRevisionId,
@@ -133,7 +157,7 @@ public final class Podcast {
       boolean retryable,
       String audioPath) {}
 
-  public static void requireRetryable(Job job) {
+  public static void requireRetryable(GenerationJob job) {
     if (job.status() != Status.failed) throw new IllegalStateException("GENERATION_NOT_FAILED");
   }
 }

@@ -2,6 +2,8 @@
 
 Reviewed 2026-11-09. This records a limited implementation pilot for human review, not a new accepted ADR or a repository-wide migration plan.
 
+Java type references below follow the current terminology (`GenerationJob`); recorded measurements and test counts remain those of the original pilot.
+
 ## Recommendation
 
 Use Spring Data JDBC selectively for ordinary single-table lookups. Keep JdbcTemplate for commands whose SQL expresses an invariant, PostgreSQL JSONB behavior, and the existing library snapshot queries. Do not add JPA for the current use cases.
@@ -12,14 +14,14 @@ The useful pilot is the generation job's four scalar lookups. The library has si
 
 | Area / operation | Classification | Treatment |
 | --- | --- | --- |
-| Job by ID, request ID, chapter ID, active revision/status | Ordinary single-table reads | Derived repository methods in this pilot |
+| GenerationJob by ID, request ID, chapter ID, active revision/status | Ordinary single-table reads | Derived repository methods in this pilot |
 | Generation insert with `ON CONFLICT DO NOTHING`, followed by conflict resolution | Atomic/idempotent creation | Keep insert SQL and existing transaction; repository lookups participate in that transaction |
 | Queue claim: `UPDATE ... RETURNING` with `FOR UPDATE SKIP LOCKED` | Atomic concurrency-sensitive command | Keep exactly the existing SQL; never replace with find-then-save |
 | State/totals updates and conditional manual retry | Explicit commands | Keep SQL; retry requires failed status and remains protected by the active-revision index |
 | Startup recovery | Bulk job update plus JSONB payload update | Keep both statements; retain usage/cost and mark uncertain calls interrupted without queuing work |
 | Accepted segment/audio reads | Ordered JSONB snapshot reads | Keep SQL casts/order and existing Jackson decoding |
 | Accepted segment/audio inserts | Insert-only immutable checkpoints | Keep inserts, composite keys, foreign keys and database triggers |
-| Attempt insert/finalization | PostgreSQL JSONB upsert | Keep full-payload replacement by attempt ID; separate IDs continue to represent separate calls |
+| ProviderAttempt insert/finalization | PostgreSQL JSONB upsert | Keep full-payload replacement by attempt ID; separate IDs continue to represent separate calls |
 | Book creation and lookup | Simple CRUD/read candidates | A future small repository could cover these; not enough benefit alone to justify JPA now |
 | Book listing | Explicit expression-based ordering | Preserve `lower(title), id`; plain title ordering is not an equivalent replacement |
 | Chapter-number availability | Existence lookup with optional excluded ID | Could become two derived exists queries, but the uniqueness constraint and conflict translation must remain |
@@ -50,10 +52,10 @@ JPA is not inherently incompatible with JdbcTemplate: [JpaTransactionManager sup
 ## Implemented pilot
 
 - Replaced the JDBC starter with Boot's Data JDBC starter, which retains JdbcTemplate transitively. Boot 3.5.16 manages Spring Data JDBC 3.5.13; no JPA/Hibernate dependency was added.
-- Added adapter-owned `GenerationRow`, with explicit conversion to the existing `Podcast.Job`. UUIDs, status, nullable error/audio fields and creation timestamps use framework/driver mapping. No custom converters were needed.
+- Added adapter-owned `GenerationRow`, with explicit conversion to the existing `Podcast.GenerationJob`. UUIDs, status, nullable error/audio fields and creation timestamps use framework/driver mapping. No custom converters were needed.
 - Added restricted `GenerationReadRepository extends Repository`, with only `findById`, `findByRequestId`, `findByRevisionIdAndStatusIn`, and `findByChapterIdOrderByCreatedAtDescIdDesc`.
 - Kept application persistence ports unchanged. Spring Data annotations/interfaces remain inside the generation adapter.
-- Kept SQL commands intact. Claim-returned rows use Spring Framework's existing `DataClassRowMapper` and the same `GenerationRow.toJob()` conversion as repository reads.
+- Kept SQL commands intact. Claim-returned rows use Spring Framework's existing `DataClassRowMapper` and the same `GenerationRow.toGenerationJob()` conversion as repository reads.
 - Used read-only repository transactions with normal REQUIRED propagation. They join the store's existing read/write creation transaction; direct reads end their transaction before returning immutable row values. No custom transaction-manager bean was introduced.
 - Retained Flyway as schema authority. No migration, constraint, index, trigger, DataSource configuration or schema-generation setting changed.
 

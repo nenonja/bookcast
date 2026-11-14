@@ -12,14 +12,14 @@ public final class DialogueText {
 
   private DialogueText() {}
 
-  public static Segment normalize(Segment segment) {
-    return new Segment(
+  public static DialogueSegment normalize(DialogueSegment segment) {
+    return new DialogueSegment(
         segment.order(),
         segment.coveredSourceBlockIds(),
         segment.dialogueTurns().stream().map(DialogueText::normalize).toList());
   }
 
-  public static Turn normalize(Turn turn) {
+  public static DialogueTurn normalize(DialogueTurn turn) {
     var prefix = LEADING_ROLE.matcher(turn.text());
     if (!prefix.find()) return turn;
     String role =
@@ -27,7 +27,7 @@ public final class DialogueText {
             ? prefix.group(1)
             : prefix.group(2) != null ? prefix.group(2) : prefix.group(3);
     if (!turn.speakerRole().name().equals(role)) throw new SpeakerMismatch();
-    return new Turn(turn.speakerRole(), turn.text().substring(prefix.end()));
+    return new DialogueTurn(turn.speakerRole(), turn.text().substring(prefix.end()));
   }
 
   public static final class SpeakerMismatch extends IllegalArgumentException {

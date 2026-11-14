@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.bookcast.app.generation.domain.Podcast.Speaker;
-import com.bookcast.app.generation.domain.Podcast.Group;
+import com.bookcast.app.generation.domain.Podcast.SpeechChunk;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.file.*;
@@ -101,7 +101,7 @@ class OpenAiSpeechSettingsTest {
     assertEquals(saved, Files.readString(snapshot(job)));
     UUID attempt = UUID.randomUUID();
     assertEquals("SPEECH_CONFIGURATION_CHANGED", assertThrows(IllegalStateException.class,
-        () -> changed.render(new Group(
+        () -> changed.render(new SpeechChunk(
             0, 0, Speaker.EXPERT, "Selitys.", "hash", List.of()), job, attempt)).getMessage());
     assertFalse(Files.exists(data.resolve(job.toString()).resolve(attempt.toString())));
   }

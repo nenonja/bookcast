@@ -35,13 +35,13 @@ public final class Capabilities {
       UUID attemptId,
       int order,
       List<Block> blocks,
-      List<Turn> previousTurns,
+      List<DialogueTurn> previousTurns,
       boolean first,
       boolean last,
       String sourceLanguage,
       String outputLanguage) {}
 
-  public record TextResult(Segment segment, Metadata metadata) {}
+  public record TextResult(DialogueSegment segment, Metadata metadata) {}
 
   public record AudioResult(byte[] pcm, String transcript, Metadata metadata) {}
 
@@ -74,13 +74,13 @@ public final class Capabilities {
      */
     default void prepareGeneration(UUID generationId) {}
 
-    AudioResult render(Group group, UUID generationId, UUID attemptId);
+    AudioResult render(SpeechChunk group, UUID generationId, UUID attemptId);
   }
 
   public interface AudioArtifacts {
     String preserve(UUID job, UUID attempt, byte[] pcm, String transcript);
 
-    AudioReceipt validate(Group group, String path, String transcript);
+    AudioReceipt validate(SpeechChunk group, String path, String transcript);
 
     void verify(AudioReceipt receipt);
 

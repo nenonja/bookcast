@@ -1,7 +1,7 @@
 package com.bookcast.app.generation.adapter.openai;
 
 import com.bookcast.app.generation.application.Capabilities.*;
-import com.bookcast.app.generation.domain.Podcast.Segment;
+import com.bookcast.app.generation.domain.Podcast.DialogueSegment;
 import com.fasterxml.jackson.databind.*;
 import java.net.*;
 import java.net.http.*;
@@ -218,7 +218,7 @@ public class OpenAiText implements TextGeneration {
           folder.resolve("dialogue-candidate.json"),
           output.toString(),
           java.nio.file.StandardOpenOption.CREATE_NEW);
-      return new TextResult(json.readValue(output.toString(), Segment.class), metadata);
+      return new TextResult(json.readValue(output.toString(), DialogueSegment.class), metadata);
     } catch (Exception e) {
       // Request construction, parsing and local persistence failures must not spend retry calls.
       return new TextResult(

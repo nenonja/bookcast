@@ -49,13 +49,13 @@ class GenerationConcurrencyTest {
     UUID request1 = UUID.randomUUID(), request2 = sameRequest ? request1 : UUID.randomUUID();
     var start = new CyclicBarrier(2);
     try (var executor = Executors.newFixedThreadPool(2)) {
-      List<Future<Job>> results = new ArrayList<>();
+      List<Future<GenerationJob>> results = new ArrayList<>();
       for (UUID request : List.of(request1, request2)) results.add(executor.submit(() -> {
         start.await(10, TimeUnit.SECONDS);
         return store.create(request, chapter, revision, "text", "audio");
       }));
-      Job first = results.get(0).get(10, TimeUnit.SECONDS);
-      Job second = results.get(1).get(10, TimeUnit.SECONDS);
+      GenerationJob first = results.get(0).get(10, TimeUnit.SECONDS);
+      GenerationJob second = results.get(1).get(10, TimeUnit.SECONDS);
       assertEquals(first, second);
       assertEquals(1, db.queryForObject(
           "select count(*) from generations where revision_id=?", Integer.class, revision));
@@ -65,15 +65,15 @@ class GenerationConcurrencyTest {
 
   @Test
   void claimSkipsLockedOldestRowAndClaimsItAfterRelease() throws Exception {
-    Job oldest = store.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "text", "audio");
-    Job newer = store.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "text", "audio");
+    GenerationJob oldest = store.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "text", "audio");
+    GenerationJob newer = store.create(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "text", "audio");
     db.update("update generations set created_at='2000-01-01T00:00:00Z' where id=?", oldest.id());
     db.update("update generations set created_at='2000-01-02T00:00:00Z' where id=?", newer.id());
     try (var executor = Executors.newSingleThreadExecutor()) {
       new TransactionTemplate(transactions).executeWithoutResult(tx -> {
         assertEquals(oldest.id(), db.queryForObject(
             "select id from generations where id=? for update", UUID.class, oldest.id()));
-        Future<Optional<Job>> claim = executor.submit(store::claim);
+        Future<Optional<GenerationJob>> claim = executor.submit(store::claim);
         try {
           var claimed = claim.get(5, TimeUnit.SECONDS).orElseThrow();
           assertEquals(newer.id(), claimed.id());
@@ -94,7 +94,7 @@ class GenerationConcurrencyTest {
         UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "text", "audio").id());
     var start = new CyclicBarrier(4);
     try (var executor = Executors.newFixedThreadPool(4)) {
-      List<Future<Optional<Job>>> claims = new ArrayList<>();
+      List<Future<Optional<GenerationJob>>> claims = new ArrayList<>();
       for (int i = 0; i < 4; i++) claims.add(executor.submit(() -> {
         start.await(10, TimeUnit.SECONDS);
         return store.claim();

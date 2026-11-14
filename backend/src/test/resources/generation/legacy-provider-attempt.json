@@ -1,0 +1,21 @@
+{
+  "id": "22222222-2222-4222-8222-222222222222",
+  "capability": "audio",
+  "unitKey": "group-0",
+  "provider": "openai",
+  "model": "gpt-realtime-2.1-mini",
+  "outcome": "failed",
+  "elapsedMs": 1000,
+  "usage": {"inputTextTokens": 123, "outputTextTokens": 0, "outputAudioTokens": 0},
+  "estimatedCost": 0.000123,
+  "retryable": true,
+  "errorCode": "PROVIDER_TIMEOUT",
+  "attemptNumber": 1,
+  "startedAt": "2026-10-10T12:00:00Z",
+  "endedAt": "2026-10-10T12:00:01Z",
+  "usageUnknown": false,
+  "retryClassification": "TRANSIENT",
+  "providerStatus": 503,
+  "providerCode": "service_unavailable",
+  "nextRetryDelayMs": 1000
+}

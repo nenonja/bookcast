@@ -37,7 +37,7 @@ public class GenerationController implements GenerationApi {
    * on recorded attempts and is true for an empty attempt list. These reads are not an atomic
    * progress snapshot, and the returned audio URLs do not themselves verify file availability.
    */
-  private GenerationDto dto(Job j) {
+  private GenerationDto dto(GenerationJob j) {
     var segments = service.segments(j.id());
     var audio = service.audio(j.id());
     var attempts = service.attempts(j.id());
@@ -45,12 +45,12 @@ public class GenerationController implements GenerationApi {
         textEstimatedCost =
             attempts.stream()
                 .filter(a -> a.capability().equals("dialogue") && a.estimatedCost() != null)
-                .mapToDouble(Attempt::estimatedCost)
+                .mapToDouble(ProviderAttempt::estimatedCost)
                 .sum(),
         speechEstimatedCost =
             attempts.stream()
                 .filter(a -> a.capability().equals("audio") && a.estimatedCost() != null)
-                .mapToDouble(Attempt::estimatedCost)
+                .mapToDouble(ProviderAttempt::estimatedCost)
                 .sum();
     return new GenerationDto()
         .id(j.id())

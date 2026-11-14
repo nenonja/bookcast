@@ -3,7 +3,7 @@ package com.bookcast.app.generation.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.bookcast.app.generation.application.Capabilities.AudioMetadata;
-import com.bookcast.app.generation.domain.AudioGroups;
+import com.bookcast.app.generation.domain.SpeechChunkPlanner;
 import com.bookcast.app.generation.domain.Podcast.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.*;
@@ -26,7 +26,7 @@ class LocalAudioMetadataTest {
     var artifacts = new LocalAudioArtifacts(data.toString(), 30);
     UUID job = UUID.randomUUID(), attempt = UUID.randomUUID();
     String script = "Tämä on suomalainen selitys.";
-    var group = new Group(0, 0, Speaker.EXPERT, script, AudioGroups.hash(script), List.of());
+    var group = new SpeechChunk(0, 0, Speaker.EXPERT, script, SpeechChunkPlanner.hash(script), List.of());
     var audio = new FakeCapabilities().fakeSpeech().render(group, job, attempt);
     String raw = artifacts.preserve(job, attempt, audio.pcm(), audio.transcript());
     var receipt = artifacts.validate(group, raw, audio.transcript());
@@ -53,7 +53,7 @@ class LocalAudioMetadataTest {
     } finally {
       if (probe.isAlive()) probe.destroyForcibly();
     }
-    assertEquals(AudioGroups.hash(Files.readAllBytes(media)),
+    assertEquals(SpeechChunkPlanner.hash(Files.readAllBytes(media)),
         Files.readString(Path.of(media + ".sha256")));
     assertArrayEquals(audio.pcm(), Files.readAllBytes(data.resolve(raw)));
     artifacts.verify(receipt);

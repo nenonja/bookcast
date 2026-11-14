@@ -72,10 +72,10 @@ class ProviderProtocolTest {
     var response = mock(HttpResponse.class);
     UUID block = UUID.randomUUID();
     var segment =
-        new Segment(
+        new DialogueSegment(
             order,
             List.of(block),
-            List.of(new Turn(Speaker.HOST, "Miksi?"), new Turn(Speaker.EXPERT, "Siksi.")));
+            List.of(new DialogueTurn(Speaker.HOST, "Miksi?"), new DialogueTurn(Speaker.EXPERT, "Siksi.")));
     String payload =
         json.writeValueAsString(
             Map.of(
@@ -102,10 +102,10 @@ class ProviderProtocolTest {
     var blocks = List.of(new ChapterSource.Block(block, 0, "Example source.", null));
     var continuity =
         first
-            ? List.<Turn>of()
+            ? List.<DialogueTurn>of()
             : List.of(
-                new Turn(Speaker.HOST, "Entä tämän ratkaisun rajoitukset?"),
-                new Turn(Speaker.EXPERT, "Niitä tarkastellaan seuraavaksi."));
+                new DialogueTurn(Speaker.HOST, "Entä tämän ratkaisun rajoitukset?"),
+                new DialogueTurn(Speaker.EXPERT, "Niitä tarkastellaan seuraavaksi."));
     var request =
         new TextRequest(
             UUID.randomUUID(),
@@ -302,7 +302,7 @@ class ProviderProtocolTest {
     UUID job = UUID.randomUUID(), attempt = UUID.randomUUID();
     var result =
         adapter.render(
-            new Group(0, 0, Speaker.EXPERT, "Selitys.", "hash", List.of()), job, attempt);
+            new SpeechChunk(0, 0, Speaker.EXPERT, "Selitys.", "hash", List.of()), job, attempt);
     assertEquals(expectedError, result.metadata().errorCode());
     assertArrayEquals(new byte[] {1, 0, 2, 0}, result.pcm());
     assertEquals("Selitys.", result.transcript());

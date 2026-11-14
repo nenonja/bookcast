@@ -4,13 +4,13 @@ import com.bookcast.app.generation.domain.Podcast.*;
 import java.util.*;
 
 public interface GenerationStore {
-  Job create(UUID request, UUID chapter, UUID revision, String generationModel, String audioModel);
+  GenerationJob create(UUID request, UUID chapter, UUID revision, String generationModel, String audioModel);
 
-  Job get(UUID id);
+  GenerationJob get(UUID id);
 
-  List<Job> list(UUID chapter);
+  List<GenerationJob> list(UUID chapter);
 
-  Optional<Job> claim();
+  Optional<GenerationJob> claim();
 
   void interrupted();
 
@@ -21,15 +21,15 @@ public interface GenerationStore {
 
   void retry(UUID id);
 
-  List<Segment> segments(UUID id);
+  List<DialogueSegment> segments(UUID id);
 
-  void segment(UUID id, Segment segment);
+  void segment(UUID id, DialogueSegment segment);
 
   List<AudioReceipt> audio(UUID id);
 
   void audio(UUID id, AudioReceipt receipt);
 
-  void attempt(UUID job, Attempt attempt);
+  void attempt(UUID job, ProviderAttempt attempt);
 
-  List<Attempt> attempts(UUID id);
+  List<ProviderAttempt> attempts(UUID id);
 }

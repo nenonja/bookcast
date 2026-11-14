@@ -22,17 +22,17 @@ class DomainTest {
   }
 
   @Test
-  void audioPlanRetainsEveryTurnSliceExactlyOnce() {
+  void speechChunkPlanRetainsEveryTurnSpanExactlyOnce() {
     String text = "Selkeä suomalainen selitys. ".repeat(150);
     var segment =
-        new Segment(
+        new DialogueSegment(
             0,
             List.of(UUID.randomUUID()),
             List.of(
-                new Turn(Speaker.EXPERT, text),
-                new Turn(Speaker.HOST, "Miksi?"),
-                new Turn(Speaker.EXPERT, "Näin asia toimii.")));
-    var groups = AudioGroups.plan(List.of(segment));
+                new DialogueTurn(Speaker.EXPERT, text),
+                new DialogueTurn(Speaker.HOST, "Miksi?"),
+                new DialogueTurn(Speaker.EXPERT, "Näin asia toimii.")));
+    var groups = SpeechChunkPlanner.plan(List.of(segment));
     for (int turn = 0; turn < 3; turn++) {
       final int index = turn;
       var slices =
@@ -54,7 +54,7 @@ class DomainTest {
 
   @Test
   void providerTrailingSilenceDoesNotPassEvenWithFullTranscript() {
-    var group = new Group(0, 0, Speaker.EXPERT, "Tämä on kokonainen ajatus.", "hash", List.of());
+    var group = new SpeechChunk(0, 0, Speaker.EXPERT, "Tämä on kokonainen ajatus.", "hash", List.of());
     var buffer = ByteBuffer.allocate(24000 * 2 * 10).order(ByteOrder.LITTLE_ENDIAN);
     for (int i = 0; i < 24000 * 5; i++) buffer.putShort((short) 1800);
     assertThrows(
@@ -65,10 +65,10 @@ class DomainTest {
   @Test
   void malformedCoverageCannotPass() {
     var segment =
-        new Segment(
+        new DialogueSegment(
             0,
             List.of(UUID.randomUUID()),
-            List.of(new Turn(Speaker.HOST, "Miksi?"), new Turn(Speaker.EXPERT, "Siksi.")));
+            List.of(new DialogueTurn(Speaker.HOST, "Miksi?"), new DialogueTurn(Speaker.EXPERT, "Siksi.")));
     assertThrows(
         IllegalArgumentException.class, () -> segment.validate(0, List.of(UUID.randomUUID())));
   }

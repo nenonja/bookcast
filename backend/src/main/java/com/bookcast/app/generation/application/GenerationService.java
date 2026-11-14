@@ -36,7 +36,7 @@ public class GenerationService {
     this.audioRetry = audioRetry;
   }
 
-  public Job start(UUID chapter, UUID revision, UUID request) {
+  public GenerationJob start(UUID chapter, UUID revision, UUID request) {
     library.revision(chapter, revision);
     var job = store.create(
         request, chapter, revision, text.profile().model(), speech.profile().model());
@@ -44,16 +44,16 @@ public class GenerationService {
     return job;
   }
 
-  public Job get(UUID id) {
+  public GenerationJob get(UUID id) {
     return store.get(id);
   }
 
-  public List<Job> list(UUID chapter) {
+  public List<GenerationJob> list(UUID chapter) {
     library.chapter(chapter);
     return store.list(chapter);
   }
 
-  public List<Segment> segments(UUID id) {
+  public List<DialogueSegment> segments(UUID id) {
     return store.segments(id);
   }
 
@@ -61,11 +61,11 @@ public class GenerationService {
     return store.audio(id);
   }
 
-  public List<Attempt> attempts(UUID id) {
+  public List<ProviderAttempt> attempts(UUID id) {
     return store.attempts(id);
   }
 
-  public Job retry(UUID id) {
+  public GenerationJob retry(UUID id) {
     var job = store.get(id);
     Podcast.requireRetryable(job);
     prepareGeneration(job);
@@ -133,14 +133,14 @@ public class GenerationService {
     return result;
   }
 
-  private void prepareGeneration(Job job) {
+  private void prepareGeneration(GenerationJob job) {
     if (!job.generationModel().equals(text.profile().model())
         || !job.audioModel().equals(speech.profile().model()))
       throw new IllegalStateException("GENERATION_PROFILE_CHANGED");
     speech.prepareGeneration(job.id());
   }
 
-  private void run(Job job) {
+  private void run(GenerationJob job) {
     prepareGeneration(job);
     var source = library.revision(job.chapterId(), job.sourceRevisionId());
     var units = units(source);
@@ -152,9 +152,9 @@ public class GenerationService {
 
     for (int i = segments.size(); i < units.size(); i++) {
       store.state(job.id(), "running", "dialogue", null, false, null);
-      var previous = segments.isEmpty() ? List.<Turn>of() : segments.getLast().dialogueTurns();
+      var previous = segments.isEmpty() ? List.<DialogueTurn>of() : segments.getLast().dialogueTurns();
       previous = previous.subList(Math.max(0, previous.size() - 4), previous.size());
-      Segment acceptedSegment =
+      DialogueSegment acceptedSegment =
           renderDialogue(
               job,
               i,
@@ -166,7 +166,7 @@ public class GenerationService {
       store.segment(job.id(), acceptedSegment);
       segments.add(acceptedSegment);
     }
-    var groups = AudioGroups.plan(segments);
+    var groups = SpeechChunkPlanner.plan(segments);
     store.totals(job.id(), units.size(), groups.size());
     var receipts = new ArrayList<>(store.audio(job.id()));
     for (var receipt : receipts) {
@@ -186,7 +186,7 @@ public class GenerationService {
     store.state(job.id(), "succeeded", "complete", null, false, finalPath);
   }
 
-  private AudioReceipt renderAudio(Job job, Group group) {
+  private AudioReceipt renderAudio(GenerationJob job, SpeechChunk group) {
     var number = new AtomicInteger();
     var result =
         audioRetry.execute(
@@ -198,7 +198,8 @@ public class GenerationService {
     return result.value();
   }
 
-  private AudioRetryPolicy.Result<AudioReceipt> renderAudioAttempt(Job job, Group group, int number) {
+  private AudioRetryPolicy.Result<AudioReceipt> renderAudioAttempt(
+      GenerationJob job, SpeechChunk group, int number) {
     var profile = speech.profile();
     store.state(
         job.id(),
@@ -212,7 +213,7 @@ public class GenerationService {
     var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
     store.attempt(
         job.id(),
-        new Attempt(
+        new ProviderAttempt(
             attempt,
             "audio",
             "group-" + group.order(),
@@ -268,7 +269,7 @@ public class GenerationService {
         delay ->
             store.attempt(
                 job.id(),
-                new Attempt(
+                new ProviderAttempt(
                     attempt,
                     "audio",
                     "group-" + group.order(),
@@ -290,11 +291,11 @@ public class GenerationService {
                     delay)));
   }
 
-  private Segment renderDialogue(
-      Job job,
+  private DialogueSegment renderDialogue(
+      GenerationJob job,
       int order,
       List<ChapterSource.Block> blocks,
-      List<Turn> previous,
+      List<DialogueTurn> previous,
       boolean last,
       String sourceLanguage) {
     var number = new AtomicInteger();
@@ -310,11 +311,11 @@ public class GenerationService {
     return result.value();
   }
 
-  private AudioRetryPolicy.Result<Segment> renderDialogueAttempt(
-      Job job,
+  private AudioRetryPolicy.Result<DialogueSegment> renderDialogueAttempt(
+      GenerationJob job,
       int order,
       List<ChapterSource.Block> blocks,
-      List<Turn> previous,
+      List<DialogueTurn> previous,
       boolean last,
       String sourceLanguage,
       int number) {
@@ -325,7 +326,7 @@ public class GenerationService {
     var started = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
     store.attempt(
         job.id(),
-        new Attempt(
+        new ProviderAttempt(
             attempt,
             "dialogue",
             "segment-" + order,
@@ -365,7 +366,7 @@ public class GenerationService {
     }
     var metadata = result.metadata();
     String error = metadata.errorCode();
-    Segment accepted = null;
+    DialogueSegment accepted = null;
     if (error == null) {
       try {
         if (result.segment() == null) throw new IllegalArgumentException();
@@ -390,7 +391,7 @@ public class GenerationService {
         delay ->
             store.attempt(
                 job.id(),
-                new Attempt(
+                new ProviderAttempt(
                     attempt,
                     "dialogue",
                     "segment-" + order,
