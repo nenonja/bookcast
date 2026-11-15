@@ -37,7 +37,7 @@ public class GenerationController implements GenerationApi {
    * on recorded attempts and is true for an empty attempt list. These reads are not an atomic
    * progress snapshot, and the returned audio URLs do not themselves verify file availability.
    */
-  private GenerationDto dto(GenerationJob j) {
+  private GenerationDto createGenerationDto(GenerationJob j) {
     var segments = service.segments(j.id());
     var audio = service.audio(j.id());
     var attempts = service.attempts(j.id());
@@ -83,19 +83,19 @@ public class GenerationController implements GenerationApi {
 
   public ResponseEntity<GenerationDto> startGeneration(UUID chapter, StartGenerationDto r) {
     return ResponseEntity.accepted()
-        .body(dto(service.start(chapter, r.getSourceRevisionId(), r.getRequestId())));
+        .body(createGenerationDto(service.start(chapter, r.getSourceRevisionId(), r.getRequestId())));
   }
 
   public ResponseEntity<GenerationDto> getGeneration(UUID id) {
-    return ResponseEntity.ok(dto(service.get(id)));
+    return ResponseEntity.ok(createGenerationDto(service.get(id)));
   }
 
   public ResponseEntity<List<GenerationDto>> listGenerations(UUID id) {
-    return ResponseEntity.ok(service.list(id).stream().map(this::dto).toList());
+    return ResponseEntity.ok(service.list(id).stream().map(this::createGenerationDto).toList());
   }
 
   public ResponseEntity<GenerationDto> retryGeneration(UUID id) {
-    return ResponseEntity.accepted().body(dto(service.retry(id)));
+    return ResponseEntity.accepted().body(createGenerationDto(service.retry(id)));
   }
 
   /**

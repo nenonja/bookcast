@@ -61,6 +61,12 @@ public class OpenAiSpeech implements SpeechRendering {
   private static final int MAX_JSON_DEPTH = 64;
   private static final int MAX_JSON_TOKENS = 16_384;
   private static final int MAX_JSON_NAME_CHARS = 256;
+  // Standard gpt-realtime-2.1-mini rates in USD; cached-input discounts are not applied.
+  // https://developers.openai.com/api/docs/models/gpt-realtime-2.1-mini
+  private static final double INPUT_TEXT_USD_PER_MILLION_TOKENS = 0.6;
+  private static final double OUTPUT_TEXT_USD_PER_MILLION_TOKENS = 2.4;
+  private static final int OUTPUT_AUDIO_USD_PER_MILLION_TOKENS = 20;
+  private static final double TOKENS_PER_MILLION = 1_000_000.0;
   private final java.nio.file.Path root;
   private final ObjectMapper json;
   private final JsonFactory eventJson;
@@ -630,8 +636,10 @@ public class OpenAiSpeech implements SpeechRendering {
       usageToken(reported, "outputAudioTokens", u.path("output_token_details").path("audio_tokens"));
       usage = Map.copyOf(reported);
       if (usage.keySet().containsAll(Set.of("inputTextTokens", "outputTextTokens", "outputAudioTokens")))
-        cost = (usage.get("inputTextTokens") * .6 + usage.get("outputTextTokens") * 2.4
-            + usage.get("outputAudioTokens") * 20) / 1000000.0;
+        cost = (usage.get("inputTextTokens") * INPUT_TEXT_USD_PER_MILLION_TOKENS
+            + usage.get("outputTextTokens") * OUTPUT_TEXT_USD_PER_MILLION_TOKENS
+            + usage.get("outputAudioTokens") * OUTPUT_AUDIO_USD_PER_MILLION_TOKENS)
+            / TOKENS_PER_MILLION;
     }
 
     /**
