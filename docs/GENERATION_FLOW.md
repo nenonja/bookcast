@@ -1,10 +1,12 @@
 # Restartable, checkpointed generation pipeline
 
-Verified against implementation and existing tests on 2026-11-14. This describes the OpenAI-backed, single-worker deployment. Fake capabilities use the same application orchestration without paid calls. See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for Java records/ports and [DATA_MODEL.md](DATA_MODEL.md) for relational persistence.
+Verified against implementation and existing tests on 2026-11-15. This describes the OpenAI-backed, single-worker deployment. Fake capabilities use the same application orchestration without paid calls. See [DOMAIN_MODEL.md](DOMAIN_MODEL.md) for Java records/ports and [DATA_MODEL.md](DATA_MODEL.md) for relational persistence.
 
 ## Processing boundaries and familiar patterns
 
-The pipeline has two distinct generation stages followed by assembly: source blocks → `DialogueSegment`/`DialogueTurn` values; dialogue turns → planned `SpeechChunk` values → accepted `AudioReceipt` checkpoints; accepted PCM → final M4A.
+The pipeline has two distinct generation stages followed by assembly: source blocks → `DialogueSegment`/`DialogueTurn` values; dialogue turns → planned `SpeechChunk` values → accepted `ValidatedAudioChunk` checkpoints; accepted PCM → final M4A.
+
+`AudioResult` remains the unvalidated capability result and can contain failed or partial output. `ValidatedAudioChunk` represents technical acceptance and becomes a reusable checkpoint on insertion; it does not guarantee transcript accuracy or complete audible word coverage. `ProviderAttempt` records the separate call history/accounting. The final M4A is the assembled podcast, not an individual validated chunk.
 
 | Conceptual pattern | Bookcast's existing implementation |
 | --- | --- |
@@ -120,7 +122,7 @@ sequenceDiagram
         Audio->>Files: CREATE_NEW raw.pcm and transcript.txt
         Audio-->>Service: PCM reference
         Service->>Audio: validate(group, reference, transcript)
-        Audio-->>Service: AudioReceipt
+        Audio-->>Service: ValidatedAudioChunk
         Service->>Store: attempt succeeded with usage and cost
         Service->>Store: audio(job.id, receipt) INSERT
     end
@@ -230,7 +232,7 @@ Manual retry checks the failed GenerationJob and current text/audio model names,
 
 Resume uses accepted **prefixes**, not provider attempt counts. Persisted dialogue is validated against newly reconstructed source units; completed segments are not regenerated. The audio plan includes old and new dialogue. Saved receipts must match planned chunks and PCM hashes; processing continues after the accepted prefix. SQL keys ensure uniqueness but not contiguous ordering; the sequential writer produces prefixes, and assembly explicitly rejects receipt-order gaps. If every speech chunk is already accepted, no provider call is needed and assembly can run again.
 
-Existing DialogueSegment/AudioReceipt rows, attempt IDs and accounting, accepted PCM/transcripts, failed candidates, stream journals and prior assembly files are preserved. New calls use fresh attempt directories. Assembly uses new scratch/output filenames, so a failed assembly can be retried without rewriting accepted audio. Files written before a crash may be partial; they do not become checkpoints merely by existing.
+Existing DialogueSegment/ValidatedAudioChunk rows, attempt IDs and accounting, accepted PCM/transcripts, failed candidates, stream journals and prior assembly files are preserved. New calls use fresh attempt directories. Assembly uses new scratch/output filenames, so a failed assembly can be retried without rewriting accepted audio. Files written before a crash may be partial; they do not become checkpoints merely by existing.
 
 Additional provider cost is possible only for missing units, including a call interrupted after the provider received it. Automatic retries and a later manual retry can each incur further calls; the per-unit three-attempt budget starts anew on each run. ProviderAttempt finalization and checkpoint insertion are separate writes: a crash after a successful call/attempt record but before checkpoint insertion can cause that missing unit to be called again. Saved candidates are not automatically promoted or reused as accepted work. Usage may be unknown even when the provider charged for interrupted work.
 
@@ -257,9 +259,9 @@ This is a small synthetic fixture, not production content or output from a paid 
 
 Consecutive EXPERT turns share chunk 1 because they belong to the same segment, have the same speaker and their combined text fits the unchanged 1,400-byte UTF-8 budget (47 bytes here). The blank-line separator is inserted by the planner; both spans still refer to their original turn text. The text hash is SHA-256 of that exact combined UTF-8 string. Same-speaker turns across a segment boundary are not merged.
 
-Suppose chunk 0 is already accepted. Rendering chunk 1 starts ProviderAttempt A (`capability=audio`, legacy `unitKey=group-1`, `attemptNumber=1`). A returns a classified transient timeout: its outcome becomes `failed`, available usage/cost and partial PCM/transcript remain, and **no AudioReceipt is inserted**. If the bounded policy permits another call, ProviderAttempt B gets a new ID with the same unit key and `attemptNumber=2`.
+Suppose chunk 0 is already accepted. Rendering chunk 1 starts ProviderAttempt A (`capability=audio`, legacy `unitKey=group-1`, `attemptNumber=1`). A returns a classified transient timeout: its outcome becomes `failed`, available usage/cost and partial PCM/transcript remain, and **no ValidatedAudioChunk is inserted**. If the bounded policy permits another call, ProviderAttempt B gets a new ID with the same unit key and `attemptNumber=2`.
 
-If B completes successfully, returned PCM/transcript are preserved under `<job>/<B>/raw.pcm` and `transcript.txt`, then checked. Only after structural and waveform gates pass can `AudioReceipt.group` refer to chunk 1 with its PCM path/hash, transcript and waveform diagnostics. B's attempt is finalized and the receipt is inserted under `(generation_id, group_order=1)`. A planned chunk alone is not evidence that any audio exists; a successful attempt record alone is not an accepted checkpoint either.
+If B completes successfully, returned PCM/transcript are preserved under `<job>/<B>/raw.pcm` and `transcript.txt`, then checked. Only after structural and waveform gates pass can `ValidatedAudioChunk.group` refer to chunk 1 with its PCM path/hash, transcript and waveform diagnostics. B's attempt is finalized and the receipt is inserted under `(generation_id, group_order=1)`. A planned chunk alone is not evidence that any audio exists; a successful attempt record alone is not an accepted checkpoint either.
 
 After chunk 2 also has a receipt, assembly consumes receipts in order 0, 1, 2. This HOST → EXPERT → HOST example adds two 350 ms pauses. With six seconds of PCM per chunk the concatenated PCM is 18.7 seconds before AAC encoding. Accepted PCM is verified and copied; final M4A gets a new filename. If execution stops after accepting chunk 1, resume preserves receipts 0 and 1 and renders only chunk 2. An interrupted B without a receipt can instead require another paid call.
 

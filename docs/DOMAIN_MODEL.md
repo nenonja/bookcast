@@ -1,16 +1,16 @@
 # Bookcast Java domain model
 
-Verified against the Java implementation on 2026-11-14. These diagrams show records, fields and application contracts; [DATA_MODEL.md](DATA_MODEL.md) separately documents tables, keys and JSONB. [GENERATION_FLOW.md](GENERATION_FLOW.md) shows execution and recovery.
+Verified against the Java implementation on 2026-11-15. These diagrams show records, fields and application contracts; [DATA_MODEL.md](DATA_MODEL.md) separately documents tables, keys and JSONB. [GENERATION_FLOW.md](GENERATION_FLOW.md) shows execution and recovery.
 
 Solid arrows labelled with a field name represent actual Java references; diamonds indicate contained record values/lists, not JPA cascades or database ownership. Dashed arrows are dependencies, ID-based lookups or derived relationships, as labelled. Selected members are shown; no bidirectional relationships are implied.
 
-These records describe a **restartable, checkpointed processing pipeline**: source blocks become `DialogueSegment` values, their turns become planned `SpeechChunk` values, validated PCM becomes `AudioReceipt` checkpoints, and assembly produces M4A. `GenerationJob` is the lifecycle snapshot; `GenerationService` performs the orchestration. The names do not add aggregate ownership or change the algorithm.
+These records describe a **restartable, checkpointed processing pipeline**: source blocks become `DialogueSegment` values, their turns become planned `SpeechChunk` values, validated PCM becomes `ValidatedAudioChunk` checkpoints, and assembly produces M4A. `GenerationJob` is the lifecycle snapshot; `GenerationService` performs the orchestration. The names do not add aggregate ownership or change the algorithm.
 
 ## Java names and stable stored names
 
-The Java terminology is `GenerationJob`, `DialogueSegment`, `DialogueTurn`, `SpeechChunk`, `TurnSpan`, `SpeechChunkPlanner` and `ProviderAttempt`. `AudioReceipt` keeps its name. The former short type names are not Jackson type identifiers: stored records have no polymorphic class-name discriminator.
+The Java terminology is `GenerationJob`, `DialogueSegment`, `DialogueTurn`, `SpeechChunk`, `TurnSpan`, `SpeechChunkPlanner`, `ValidatedAudioChunk` and `ProviderAttempt`. `ValidatedAudioChunk` replaces the former `AudioReceipt` Java name. Stored records have no polymorphic class-name discriminator; the rename requires no JSON alias or historical data rewrite.
 
-Existing properties and accessors remain deliberately unchanged: `TextResult.segment`, `AudioReceipt.group`, `SpeechChunk.segment`/`slices`, and `TurnSpan.turn`. The `group` property now contains a `SpeechChunk`, `segment` is its dialogue-segment ordinal, and `slices` contains `TurnSpan` values. SQL names (`script_segments`, `audio_groups`, `generation_attempts`), API schema names (`ScriptSegment`, `DialogueTurn`, `Attempt`), `group-N`/`segment-N` keys, stage strings and filesystem layouts are compatibility contracts, not Java type names. Renaming classes does not migrate historical payloads. [GenerationJsonCompatibilityTest](../backend/src/test/java/com/bookcast/app/generation/adapter/GenerationJsonCompatibilityTest.java) reads frozen pre-rename JSON shapes and checks serialization, hashes and spans.
+Existing properties and accessors remain deliberately unchanged: `TextResult.segment`, `ValidatedAudioChunk.group`, `SpeechChunk.segment`/`slices`, and `TurnSpan.turn`. The `group` property now contains a `SpeechChunk`, `segment` is its dialogue-segment ordinal, and `slices` contains `TurnSpan` values. SQL names (`script_segments`, `audio_groups`, `generation_attempts`), API schema names (`ScriptSegment`, `DialogueTurn`, `Attempt`), `group-N`/`segment-N` keys, stage strings and filesystem layouts are compatibility contracts, not Java type names. Renaming classes does not migrate historical payloads. [GenerationJsonCompatibilityTest](../backend/src/test/java/com/bookcast/app/generation/adapter/GenerationJsonCompatibilityTest.java) reads frozen pre-rename JSON shapes and checks serialization, hashes and spans.
 
 ## Library: chapter identity and source snapshots
 
@@ -137,7 +137,7 @@ classDiagram
         int start
         int end
     }
-    class AudioReceipt {
+    class ValidatedAudioChunk {
         <<record>>
         SpeechChunk group
         String path
@@ -165,7 +165,7 @@ classDiagram
     }
     GenerationJob --> Status : status
     GenerationJob ..> DialogueSegment : GenerationStore.segments by job ID
-    GenerationJob ..> AudioReceipt : GenerationStore.audio by job ID
+    GenerationJob ..> ValidatedAudioChunk : GenerationStore.audio by job ID
     GenerationJob ..> ProviderAttempt : GenerationStore.attempts by job ID
     DialogueSegment "1" *-- "1..*" DialogueTurn : dialogueTurns
     DialogueTurn --> Speaker : speakerRole
@@ -173,7 +173,7 @@ classDiagram
     SpeechChunk "1" *-- "0..*" TurnSpan : slices
     SpeechChunk ..> DialogueSegment : segment matches order
     TurnSpan ..> DialogueTurn : turn index and text offsets
-    AudioReceipt --> SpeechChunk : group
+    ValidatedAudioChunk --> SpeechChunk : group
     ProviderAttempt ..> DialogueSegment : unitKey segment-N
     ProviderAttempt ..> SpeechChunk : unitKey group-N
 ```
@@ -182,15 +182,15 @@ classDiagram
 
 `SpeechChunkPlanner.plan` traverses all accepted segments/turns in order. Each SpeechChunk belongs to one segment and one speaker; contiguous same-speaker spans can be combined within that segment, up to 1,400 UTF-8 bytes. `TurnSpan.turn` is a segment-local turn index; `start`/`end` are Java string offsets (UTF-16 code units, end exclusive). SpeechChunk order is global within the job. Model constructors allow empty span lists; the planner creates slices for rendered text.
 
-An `AudioReceipt` is accepted only after application waveform validation. It contains the planned SpeechChunk and a filesystem PCM reference/hash; durations and silence measurements are seconds, speaking rate is words per minute. A lexical transcript deviation is diagnostic, not an automatic rejection. There is no explicit attempt ID in a receipt: attempt identity in an artifact path is not a Java or SQL relationship.
+A `ValidatedAudioChunk` is produced after technical validation in the normal pipeline and becomes an accepted checkpoint when the service persists it. Construction or deserialization alone does not rerun validation or establish persistence. Technical acceptance does not guarantee transcript accuracy or complete audible word coverage; a lexical transcript deviation is diagnostic, not an automatic rejection. It contains the planned SpeechChunk and a filesystem PCM reference/hash; durations and silence measurements are seconds, speaking rate is words per minute. There is no explicit attempt ID in this value: attempt identity in an artifact path is not a Java or SQL relationship.
 
-Each provider call gets a new ProviderAttempt ID. `unitKey` addresses a logical `segment-N` or `group-N`, including units without accepted checkpoints; these links are alternatives, not references to both objects. ProviderAttempt fields also include start/end timestamps and provider/error details omitted above. ProviderAttempt JSONB can change during that call's lifecycle; accepted DialogueSegment/AudioReceipt rows are insert-only. Unknown estimated cost is null; it is not zero usage.
+Each provider call gets a new ProviderAttempt ID. `unitKey` addresses a logical `segment-N` or `group-N`, including units without accepted checkpoints; these links are alternatives, not references to both objects. ProviderAttempt fields also include start/end timestamps and provider/error details omitted above. ProviderAttempt JSONB can change during that call's lifecycle; accepted DialogueSegment/ValidatedAudioChunk rows are insert-only. Unknown estimated cost is null; it is not zero usage.
 
 Review: [Podcast](../backend/src/main/java/com/bookcast/app/generation/domain/Podcast.java), [SpeechChunkPlanner](../backend/src/main/java/com/bookcast/app/generation/domain/SpeechChunkPlanner.java), [DialogueText](../backend/src/main/java/com/bookcast/app/generation/domain/DialogueText.java), [GenerationStore](../backend/src/main/java/com/bookcast/app/generation/application/GenerationStore.java). [DomainTest](../backend/src/test/java/com/bookcast/app/DomainTest.java) checks turn-span coverage; [DialogueTextTest](../backend/src/test/java/com/bookcast/app/DialogueTextTest.java) covers speaker normalization; [GenerationPersistenceTest](../backend/src/test/java/com/bookcast/app/generation/adapter/GenerationPersistenceTest.java) checks immutable checkpoints and accounting.
 
 ## Capability results are candidates, not checkpoints
 
-`TextResult`, `AudioResult` and `Metadata` belong to application `Capabilities`. A valid-looking provider result is not yet a persisted DialogueSegment or AudioReceipt. This distinction lets failed calls retain usage and partial output without accepting incomplete content.
+`TextResult`, `AudioResult` and `Metadata` belong to application `Capabilities`. A valid-looking provider result is not yet a persisted DialogueSegment or ValidatedAudioChunk. This distinction lets failed calls retain usage and partial output without accepting incomplete content.
 
 ```mermaid
 classDiagram

@@ -68,7 +68,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
   }
 
   /**
-   * Builds a receipt only when the supplied PCM passes deterministic plausibility gates.
+   * Builds a validated chunk only when the supplied PCM passes deterministic plausibility gates.
    *
    * <p>Requires an even byte count of at least 4,800 bytes (0.1 seconds). A sample is active when its
    * absolute amplitude exceeds 131. Leading/trailing inactivity must each be shorter than two
@@ -76,6 +76,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    * over the first-to-last-active-sample interval must not exceed 240 words per minute. An all-quiet
    * waveform or blank transcript is rejected. Transcript/script lexical differences are recorded
    * after case/punctuation normalization; they do not cause rejection or alter the audio.
+   * These technical checks do not establish transcript accuracy or complete audible word coverage.
    *
    * @param group non-null planned group supplying the script and identity for the receipt
    * @param bytes non-null signed 16-bit little-endian mono PCM at 24,000 Hz
@@ -85,7 +86,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    * @throws IllegalArgumentException with {@code INVALID_PCM} for size/alignment failure, or
    *     {@code INVALID_AUDIO_WAVEFORM} for a failed plausibility gate
    */
-  public static AudioReceipt waveform(SpeechChunk group, byte[] bytes, String path, String transcript) {
+  public static ValidatedAudioChunk waveform(SpeechChunk group, byte[] bytes, String path, String transcript) {
     if (bytes.length < 4800 || bytes.length % 2 != 0)
       throw new IllegalArgumentException("INVALID_PCM");
     var b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
@@ -110,7 +111,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
         || wpm > 240
         || transcript.isBlank()) throw new IllegalArgumentException("INVALID_AUDIO_WAVEFORM");
     boolean lexical = !tokens(group.text()).equals(tokens(transcript));
-    return new AudioReceipt(
+    return new ValidatedAudioChunk(
         group,
         path,
         SpeechChunkPlanner.hash(bytes),
@@ -137,7 +138,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    * @throws IllegalStateException if the PCM cannot be read
    * @throws IllegalArgumentException for a rejected reference or invalid PCM/waveform
    */
-  public AudioReceipt validate(SpeechChunk group, String reference, String transcript) {
+  public ValidatedAudioChunk validate(SpeechChunk group, String reference, String transcript) {
     try {
       return waveform(group, Files.readAllBytes(path(reference)), reference, transcript);
     } catch (IOException e) {
@@ -154,7 +155,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    *     {@code ARTIFACT_HASH_MISMATCH} when the bytes differ
    * @throws IllegalArgumentException if the reference resolves lexically outside the data directory
    */
-  public void verify(AudioReceipt receipt) {
+  public void verify(ValidatedAudioChunk receipt) {
     try {
       if (!SpeechChunkPlanner.hash(Files.readAllBytes(path(receipt.path()))).equals(receipt.hash()))
         throw new IllegalStateException("ARTIFACT_HASH_MISMATCH");
@@ -210,7 +211,7 @@ public class LocalAudioArtifacts implements AudioArtifacts {
    *     {@link #command(List)}
    * @throws IllegalArgumentException for a checkpoint reference outside the data directory
    */
-  public String assemble(UUID job, List<AudioReceipt> receipts, AudioMetadata metadata) {
+  public String assemble(UUID job, List<ValidatedAudioChunk> receipts, AudioMetadata metadata) {
     try {
       Path folder = root.resolve(job.toString());
       Files.createDirectories(folder);

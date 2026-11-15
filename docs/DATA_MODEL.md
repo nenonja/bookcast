@@ -2,7 +2,7 @@
 
 Verified against Flyway V1–V3 and current adapters on 2026-11-11. Technical columns are selectively omitted.
 
-Current Java names are `GenerationJob`, `DialogueSegment`, `DialogueTurn`, `SpeechChunk`, `TurnSpan` and `ProviderAttempt`; `AudioReceipt` is unchanged. This terminology does not rename the tables, JSONB properties (`group`, `segment`, `slices`, `turn`), enum values or artifact paths. See [the Java model](DOMAIN_MODEL.md) and [checkpointed pipeline](GENERATION_FLOW.md) for the distinction between a planned chunk and accepted audio.
+Current Java names are `GenerationJob`, `DialogueSegment`, `DialogueTurn`, `SpeechChunk`, `TurnSpan`, `ProviderAttempt` and `ValidatedAudioChunk`. Technical audio acceptance does not guarantee transcript accuracy or complete audible word coverage. This terminology does not rename the tables, JSONB properties (`group`, `segment`, `slices`, `turn`), enum values or artifact paths. See [the Java model](DOMAIN_MODEL.md) and [checkpointed pipeline](GENERATION_FLOW.md) for the distinction between a planned chunk and accepted audio.
 
 ## Tables and relationships
 

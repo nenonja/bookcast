@@ -57,9 +57,9 @@ class GenerationPersistenceTest {
         List.of(new DialogueTurn(Speaker.HOST, "Miksi?"), new DialogueTurn(Speaker.EXPERT, "Siksi.")));
   }
 
-  AudioReceipt receipt(DialogueSegment segment) {
+  ValidatedAudioChunk receipt(DialogueSegment segment) {
     SpeechChunk group = SpeechChunkPlanner.plan(List.of(segment)).getFirst();
-    return new AudioReceipt(group, "fixture/raw.pcm", "accepted-hash", group.text(), false, 1, 0, 0, 60);
+    return new ValidatedAudioChunk(group, "fixture/raw.pcm", "accepted-hash", group.text(), false, 1, 0, 0, 60);
   }
 
   void rejects(Runnable operation) {
@@ -255,7 +255,7 @@ class GenerationPersistenceTest {
     db.update("insert into audio_groups values (?,?,?::jsonb)", job.id(), 0, audioJson);
     db.update("insert into generation_attempts values (?,?,?::jsonb)", attemptId, job.id(), attemptJson);
     assertEquals(json.readValue(segmentJson, DialogueSegment.class), store.segments(job.id()).getFirst());
-    assertEquals(json.readValue(audioJson, AudioReceipt.class), store.audio(job.id()).getFirst());
+    assertEquals(json.readValue(audioJson, ValidatedAudioChunk.class), store.audio(job.id()).getFirst());
     assertEquals(json.readValue(attemptJson, ProviderAttempt.class), store.attempts(job.id()).getFirst());
     for (String table : List.of("script_segments", "audio_groups", "generation_attempts")) {
       String original = table.equals("script_segments") ? segmentJson

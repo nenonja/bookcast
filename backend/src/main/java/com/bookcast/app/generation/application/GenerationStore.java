@@ -25,9 +25,9 @@ public interface GenerationStore {
 
   void segment(UUID id, DialogueSegment segment);
 
-  List<AudioReceipt> audio(UUID id);
+  List<ValidatedAudioChunk> audio(UUID id);
 
-  void audio(UUID id, AudioReceipt receipt);
+  void audio(UUID id, ValidatedAudioChunk receipt);
 
   void attempt(UUID job, ProviderAttempt attempt);
 

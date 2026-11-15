@@ -64,8 +64,14 @@ public final class Podcast {
     }
   }
 
-  /** Accepted audio evidence. The persisted {@code group} property contains its planned chunk. */
-  public record AudioReceipt(
+  /**
+   * Technically validated audio for a planned speech chunk. The normal pipeline creates this value
+   * after technical gates pass, then persists it as a reusable checkpoint. Validation does not
+   * guarantee transcript accuracy or complete audible word coverage; lexical differences remain
+   * diagnostic. Construction/deserialization alone does not rerun checks or persist acceptance.
+   * The legacy {@code group} JSON property still contains the planned chunk.
+   */
+  public record ValidatedAudioChunk(
       SpeechChunk group,
       String path,
       String hash,

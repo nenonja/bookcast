@@ -21,11 +21,11 @@ class LocalAudioArtifactsProcessTest {
   final byte[] pcm = {1, 0, 2, 0};
   final AudioMetadata metadata = new AudioMetadata("Book", "Chapter", 1);
 
-  AudioReceipt receipt() {
+  ValidatedAudioChunk receipt() {
     var group = new SpeechChunk(0, 0, Speaker.EXPERT, "Selitys.", "script-hash", List.of());
     var artifacts = new LocalAudioArtifacts(data.toString(), 17);
     String reference = artifacts.preserve(job, UUID.randomUUID(), pcm, group.text());
-    return new AudioReceipt(group, reference, SpeechChunkPlanner.hash(pcm), group.text(), false, 1, 0, 0, 60);
+    return new ValidatedAudioChunk(group, reference, SpeechChunkPlanner.hash(pcm), group.text(), false, 1, 0, 0, 60);
   }
 
   @ParameterizedTest

@@ -57,7 +57,7 @@ public class GenerationService {
     return store.segments(id);
   }
 
-  public List<AudioReceipt> audio(UUID id) {
+  public List<ValidatedAudioChunk> audio(UUID id) {
     return store.audio(id);
   }
 
@@ -186,7 +186,7 @@ public class GenerationService {
     store.state(job.id(), "succeeded", "complete", null, false, finalPath);
   }
 
-  private AudioReceipt renderAudio(GenerationJob job, SpeechChunk group) {
+  private ValidatedAudioChunk renderAudio(GenerationJob job, SpeechChunk group) {
     var number = new AtomicInteger();
     var result =
         audioRetry.execute(
@@ -198,7 +198,7 @@ public class GenerationService {
     return result.value();
   }
 
-  private AudioRetryPolicy.Result<AudioReceipt> renderAudioAttempt(
+  private AudioRetryPolicy.Result<ValidatedAudioChunk> renderAudioAttempt(
       GenerationJob job, SpeechChunk group, int number) {
     var profile = speech.profile();
     store.state(
@@ -248,7 +248,7 @@ public class GenerationService {
     } catch (RuntimeException e) {
       error = "AUDIO_ARTIFACT_WRITE_FAILURE";
     }
-    AudioReceipt receipt = null;
+    ValidatedAudioChunk receipt = null;
     if (error == null) {
       try {
         receipt = artifacts.validate(group, path, result.transcript());

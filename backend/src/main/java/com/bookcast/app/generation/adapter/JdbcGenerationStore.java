@@ -202,14 +202,14 @@ public class JdbcGenerationStore implements GenerationStore {
         "insert into script_segments values (?,?,?::jsonb)", id, segment.order(), encode(segment));
   }
 
-  public List<AudioReceipt> audio(UUID id) {
+  public List<ValidatedAudioChunk> audio(UUID id) {
     return db.query(
         "select payload::text from audio_groups where generation_id=? order by group_order",
-        (r, n) -> decode(r.getString(1), AudioReceipt.class),
+        (r, n) -> decode(r.getString(1), ValidatedAudioChunk.class),
         id);
   }
 
-  public void audio(UUID id, AudioReceipt receipt) {
+  public void audio(UUID id, ValidatedAudioChunk receipt) {
     db.update(
         "insert into audio_groups values (?,?,?::jsonb)",
         id,

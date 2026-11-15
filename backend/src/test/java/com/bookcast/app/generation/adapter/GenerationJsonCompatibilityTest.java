@@ -25,7 +25,7 @@ class GenerationJsonCompatibilityTest {
   static Stream<Arguments> payloads() {
     return Stream.of(
         Arguments.of("legacy-dialogue-segment.json", DialogueSegment.class),
-        Arguments.of("legacy-audio-receipt.json", AudioReceipt.class),
+        Arguments.of("legacy-audio-receipt.json", ValidatedAudioChunk.class),
         Arguments.of("legacy-provider-attempt.json", ProviderAttempt.class),
         Arguments.of("legacy-minimal-attempt.json", ProviderAttempt.class));
   }
@@ -67,12 +67,12 @@ class GenerationJsonCompatibilityTest {
         "c3d4ad37cb694f5a386b3863a0280c32bba435062f6cb76e4b0c8689ceefc6f7",
         "1d1ae1b4d8bed33dc6c74d87aea1139aa7e0b30aa21bf81095891f7557f84baf"),
         chunks.subList(0, 3).stream().map(SpeechChunk::textHash).toList());
-    assertEquals(chunks.getFirst(), json.readValue(fixture("legacy-audio-receipt.json"), AudioReceipt.class).group());
+    assertEquals(chunks.getFirst(), json.readValue(fixture("legacy-audio-receipt.json"), ValidatedAudioChunk.class).group());
   }
 
   @Test
   void oldReceiptStillVerifiesItsOriginalPcmPathAndHash() throws Exception {
-    var receipt = json.readValue(fixture("legacy-audio-receipt.json"), AudioReceipt.class);
+    var receipt = json.readValue(fixture("legacy-audio-receipt.json"), ValidatedAudioChunk.class);
     var pcm = ByteBuffer.allocate(24000 * 2 * 6).order(ByteOrder.LITTLE_ENDIAN);
     while (pcm.hasRemaining()) pcm.putShort((short) 1800);
     Path path = data.resolve(receipt.path());
@@ -82,14 +82,19 @@ class GenerationJsonCompatibilityTest {
     artifacts.verify(receipt);
     assertEquals(path.toAbsolutePath().toString(), artifacts.absolutePath(receipt.path()));
     assertEquals(receipt, artifacts.validate(receipt.group(), receipt.path(), receipt.transcript()));
+    // Technical acceptance deliberately does not establish that the transcript matches the script.
+    var deviation = artifacts.validate(receipt.group(), receipt.path(), "Eri sisältö.");
+    assertTrue(deviation.lexicalDeviation());
+    assertEquals("Eri sisältö.", deviation.transcript());
+    assertEquals(receipt.hash(), deviation.hash());
   }
 
   @Test
   void assemblyRejectsAnOrderGapBeforeEncoding() throws Exception {
-    var receipt = json.readValue(fixture("legacy-audio-receipt.json"), AudioReceipt.class);
+    var receipt = json.readValue(fixture("legacy-audio-receipt.json"), ValidatedAudioChunk.class);
     var chunk = receipt.group();
     var outOfOrder = new SpeechChunk(1, chunk.segment(), chunk.speaker(), chunk.text(), chunk.textHash(), chunk.slices());
-    var invalid = new AudioReceipt(outOfOrder, receipt.path(), receipt.hash(), receipt.transcript(),
+    var invalid = new ValidatedAudioChunk(outOfOrder, receipt.path(), receipt.hash(), receipt.transcript(),
         receipt.lexicalDeviation(), receipt.duration(), receipt.longestInternalSilence(),
         receipt.trailingSilence(), receipt.wordsPerMinute());
     var artifacts = new LocalAudioArtifacts(data.toString(), 30);

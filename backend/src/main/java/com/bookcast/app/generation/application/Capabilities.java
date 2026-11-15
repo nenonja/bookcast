@@ -80,11 +80,11 @@ public final class Capabilities {
   public interface AudioArtifacts {
     String preserve(UUID job, UUID attempt, byte[] pcm, String transcript);
 
-    AudioReceipt validate(SpeechChunk group, String path, String transcript);
+    ValidatedAudioChunk validate(SpeechChunk group, String path, String transcript);
 
-    void verify(AudioReceipt receipt);
+    void verify(ValidatedAudioChunk receipt);
 
-    String assemble(UUID job, List<AudioReceipt> receipts, AudioMetadata metadata);
+    String assemble(UUID job, List<ValidatedAudioChunk> receipts, AudioMetadata metadata);
 
     String absolutePath(String reference);
   }

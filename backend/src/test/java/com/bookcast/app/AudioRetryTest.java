@@ -22,7 +22,7 @@ class AudioRetryTest {
     final SpeechRendering speech = mock(SpeechRendering.class);
     final AudioArtifacts artifacts = mock(AudioArtifacts.class);
     boolean interruptBeforeRetry;
-    final List<AudioReceipt> receipts = new ArrayList<>();
+    final List<ValidatedAudioChunk> receipts = new ArrayList<>();
     final Map<UUID, ProviderAttempt> attempts = new LinkedHashMap<>();
     final List<String> stages = new ArrayList<>();
     GenerationJob job;
@@ -123,8 +123,8 @@ class AudioRetryTest {
               new AudioRetryPolicy(attempt -> 0L));
     }
 
-    static AudioReceipt receipt(SpeechChunk group) {
-      return new AudioReceipt(group, "raw", "hash", group.text(), false, 1, 0, 0, 60);
+    static ValidatedAudioChunk receipt(SpeechChunk group) {
+      return new ValidatedAudioChunk(group, "raw", "hash", group.text(), false, 1, 0, 0, 60);
     }
 
     void results(Metadata... metadata) {
