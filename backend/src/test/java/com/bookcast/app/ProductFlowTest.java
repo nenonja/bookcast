@@ -183,7 +183,7 @@ class ProductFlowTest {
     UUID attemptId = UUID.randomUUID();
     attempt.put("id", attemptId.toString());
     db.update("insert into script_segments values (?,?,?::jsonb)", job.id(), 0, segment.toString());
-    db.update("insert into audio_groups values (?,?,?::jsonb)", job.id(), 0, receipt.toString());
+    db.update("insert into validated_audio_chunks values (?,?,?::jsonb)", job.id(), 0, receipt.toString());
     db.update("insert into generation_attempts values (?,?,?::jsonb)", attemptId, job.id(), attempt.toString());
     var savedDialogue = service.segments(job.id());
     var savedReceipt = service.audio(job.id()).getFirst();
@@ -222,7 +222,10 @@ class ProductFlowTest {
     mvc.perform(get("/api/v1/generations/" + job.id()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.completedSegments").value(1))
-        .andExpect(jsonPath("$.completedAudioGroups").value(3))
+        .andExpect(jsonPath("$.completedSpeechChunks").value(3))
+        .andExpect(jsonPath("$.totalSpeechChunks").value(3))
+        .andExpect(jsonPath("$.completedAudioGroups").doesNotExist())
+        .andExpect(jsonPath("$.totalAudioGroups").doesNotExist())
         .andExpect(jsonPath("$.scriptSegments[0].dialogueTurns[0].speakerRole").value("HOST"))
         .andExpect(jsonPath("$.totalEstimatedCost").value(savedAttempt.estimatedCost()));
     mvc.perform(get("/api/v1/generations/" + job.id() + "/audio/download"))
@@ -270,6 +273,12 @@ class ProductFlowTest {
     service.workOne();
     assertEquals(Status.failed, service.get(job.id()).status());
     assertEquals(1, service.audio(job.id()).size());
+    mvc.perform(get("/api/v1/generations/" + job.id()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.completedSpeechChunks").value(1))
+        .andExpect(jsonPath("$.totalSpeechChunks").value(2))
+        .andExpect(jsonPath("$.completedAudioGroups").doesNotExist())
+        .andExpect(jsonPath("$.totalAudioGroups").doesNotExist());
     String acceptedHash = service.audio(job.id()).getFirst().hash();
     int before = speech.calls;
     service.retry(job.id());
@@ -285,7 +294,7 @@ class ProductFlowTest {
                 "update script_segments set payload='{}'::jsonb where generation_id=?", job.id()));
     assertThrows(
         org.springframework.dao.DataAccessException.class,
-        () -> db.update("delete from audio_groups where generation_id=?", job.id()));
+        () -> db.update("delete from validated_audio_chunks where generation_id=?", job.id()));
     assertThrows(
         IllegalStateException.class,
         () -> service.start(newer.id(), newer.sourceRevisionId(), request));

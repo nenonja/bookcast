@@ -12,13 +12,13 @@ const chapter = {id: "chapter", bookId: "book", bookTitle: "Book", title: "Chapt
   sourceRevisionId: "revision", sourceLanguage: "en", sourceHash: "hash",
   createdAt: "2026-11-10T00:00:00Z", blocks: []} satisfies Chapter;
 const old = {id: "original", chapterId: "chapter", sourceRevisionId: "revision", status: "succeeded",
-  stage: "complete", completedSegments: 15, totalSegments: 15, completedAudioGroups: 155, totalAudioGroups: 155,
+  stage: "complete", completedSegments: 15, totalSegments: 15, completedSpeechChunks: 155, totalSpeechChunks: 155,
   generationModel: "previous-text-model", audioModel: "previous-audio-model", estimatedGenerationCost: .1,
   estimatedAudioCost: 1, totalEstimatedCost: 1.1, costComplete: true,
   audioUrl: "/api/v1/generations/original/audio", audioDownloadUrl: "/api/v1/generations/original/audio/download",
   retryable: false, scriptSegments: [], attempts: []} satisfies Generation;
 const fresh: Generation = {...old, id: "fresh", status: "queued", stage: "queued", completedSegments: 0,
-  totalSegments: 0, completedAudioGroups: 0, totalAudioGroups: 0, generationModel: "current-text-model",
+  totalSegments: 0, completedSpeechChunks: 0, totalSpeechChunks: 0, generationModel: "current-text-model",
   audioModel: "current-audio-model", estimatedGenerationCost: 0, estimatedAudioCost: 0, totalEstimatedCost: 0,
   audioUrl: undefined, audioDownloadUrl: undefined};
 const pendingKey = "bookcast:pending-request:revision";
@@ -36,6 +36,17 @@ function load(jobs: Generation[] = [old]) {
 }
 
 describe("fresh chapter generation", () => {
+  it("uses persisted and planned speech-chunk counts for progress and retry status", async () => {
+    load([{...fresh, status: "running", stage: "audio_retry:2:2", completedSegments: 2,
+      totalSegments: 3, completedSpeechChunks: 1, totalSpeechChunks: 5}]);
+    await screen.findByText(/Ääni: 1\/5/);
+    expect(screen.getByRole("status").textContent).toContain("Äänen uudelleenyritys 2/5 (yritys 2/3)");
+    const progress = screen.getByRole("progressbar", {name: "Generoinnin edistyminen"});
+    expect(progress.getAttribute("value")).toBe("3");
+    expect(progress.getAttribute("max")).toBe("8");
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it("explicitly creates a new job with a fresh key and keeps the completed audio accessible", async () => {
     localStorage.setItem("bookcast:request:revision", "original-request");
     mocks.post.mockResolvedValue({data: fresh});

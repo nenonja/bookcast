@@ -295,8 +295,10 @@ export interface components {
             stage: string;
             completedSegments: number;
             totalSegments: number;
-            completedAudioGroups: number;
-            totalAudioGroups: number;
+            /** @description Accepted and persisted audio chunks, excluding unsuccessful or unaccepted provider results */
+            completedSpeechChunks: number;
+            /** @description Planned speech chunks; may be zero until dialogue has been reconstructed and speech planned */
+            totalSpeechChunks: number;
             generationModel: string;
             audioModel: string;
             /** Format: double */

@@ -13,7 +13,7 @@ const chapter = {id: "chapter", bookId: "book", bookTitle: "Book", title: "Chapt
   sourceRevisionId: "revision", sourceLanguage: "en", sourceHash: "hash",
   createdAt: "2026-10-17T00:00:00Z", blocks: []} satisfies Chapter;
 const job = {id: "job", chapterId: "chapter", sourceRevisionId: "revision", status: "failed",
-  stage: "audio", completedSegments: 1, totalSegments: 1, completedAudioGroups: 1, totalAudioGroups: 2,
+  stage: "audio", completedSegments: 1, totalSegments: 1, completedSpeechChunks: 1, totalSpeechChunks: 2,
   generationModel: "gpt-5.4", audioModel: "gpt-realtime-2.1-mini", estimatedGenerationCost: .01,
   estimatedAudioCost: .02, totalEstimatedCost: .03, costComplete: false,
   errorCode: "PROCESS_INTERRUPTED", retryable: true, scriptSegments: [], attempts: []} satisfies Generation;

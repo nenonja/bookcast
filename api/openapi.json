@@ -1492,11 +1492,13 @@
           "totalSegments": {
             "type": "integer"
           },
-          "completedAudioGroups": {
-            "type": "integer"
+          "completedSpeechChunks": {
+            "type": "integer",
+            "description": "Accepted and persisted audio chunks, excluding unsuccessful or unaccepted provider results"
           },
-          "totalAudioGroups": {
-            "type": "integer"
+          "totalSpeechChunks": {
+            "type": "integer",
+            "description": "Planned speech chunks; may be zero until dialogue has been reconstructed and speech planned"
           },
           "generationModel": {
             "type": "string"
@@ -1553,8 +1555,8 @@
           "stage",
           "completedSegments",
           "totalSegments",
-          "completedAudioGroups",
-          "totalAudioGroups",
+          "completedSpeechChunks",
+          "totalSpeechChunks",
           "generationModel",
           "audioModel",
           "estimatedGenerationCost",

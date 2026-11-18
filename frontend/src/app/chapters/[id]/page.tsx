@@ -105,11 +105,11 @@ export default function ChapterPage({params}: { params: Promise<{ id: string }> 
             running: "Generointi käynnissä",
             succeeded: "Valmis",
             failed: "Generointi epäonnistui"
-        }[job.status]} · {job.stage.startsWith("audio_retry:") ? `Äänen uudelleenyritys ${job.stage.split(":")[1]}/${job.totalAudioGroups} (yritys ${job.stage.split(":")[2]}/3)` : job.stage}</p>
+        }[job.status]} · {job.stage.startsWith("audio_retry:") ? `Äänen uudelleenyritys ${job.stage.split(":")[1]}/${job.totalSpeechChunks} (yritys ${job.stage.split(":")[2]}/3)` : job.stage}</p>
             <p>Keskustelu: {job.completedSegments}/{job.totalSegments} ·
-                Ääni: {job.completedAudioGroups}/{job.totalAudioGroups}</p>{active &&
-                <progress aria-label="Generoinnin edistyminen" value={job.completedSegments + job.completedAudioGroups}
-                          max={Math.max(1, job.totalSegments + job.totalAudioGroups)}/>}<p>
+                Ääni: {job.completedSpeechChunks}/{job.totalSpeechChunks}</p>{active &&
+                <progress aria-label="Generoinnin edistyminen" value={job.completedSegments + job.completedSpeechChunks}
+                          max={Math.max(1, job.totalSegments + job.totalSpeechChunks)}/>}<p>
                 <small>{job.generationModel} / {job.audioModel}<br/>Arvio:
                     keskustelu {cost(job.estimatedGenerationCost)}, ääni {cost(job.estimatedAudioCost)},
                     yhteensä {cost(job.totalEstimatedCost)}{!job.costComplete ? " (osa käyttötiedoista puuttuu)" : ""}

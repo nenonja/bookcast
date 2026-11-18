@@ -8,6 +8,8 @@ The pipeline has two distinct generation stages followed by assembly: source blo
 
 `AudioResult` remains the unvalidated capability result and can contain failed or partial output. `ValidatedAudioChunk` represents technical acceptance and becomes a reusable checkpoint on insertion; it does not guarantee transcript accuracy or complete audible word coverage. `ProviderAttempt` records the separate call history/accounting. The final M4A is the assembled podcast, not an individual validated chunk.
 
+Polling exposes `completedSpeechChunks` (accepted persisted chunks) and `totalSpeechChunks` (planned chunks). The accepted checkpoints live in SQL `validated_audio_chunks`, ordered by `chunk_order`; V4 renames the old table/column without changing checkpoint JSONB, attempt history or artifact paths. The total remains in `GenerationJob.totalAudio` / SQL `generations.total_audio`. Provider failures and temporary candidates contribute no accepted count. See [migration and backup steps](DATA_MODEL.md#applying-v4-to-existing-local-data).
+
 | Conceptual pattern | Bookcast's existing implementation |
 | --- | --- |
 | Pipes and Filters / staged processing | Source filtering/partitioning, dialogue generation/validation, speech planning/rendering/validation, then assembly. These are ordinary service calls with persisted results, not a stream framework. |
@@ -124,7 +126,7 @@ sequenceDiagram
         Service->>Audio: validate(group, reference, transcript)
         Audio-->>Service: ValidatedAudioChunk
         Service->>Store: attempt succeeded with usage and cost
-        Service->>Store: audio(job.id, receipt) INSERT
+        Service->>Store: audio(job.id, receipt) INSERT validated_audio_chunks
     end
     Service->>Store: state running/assembly
     Service->>Audio: assemble(job.id, receipts, AudioMetadata)
@@ -139,7 +141,7 @@ This is one possible ordering: the creation transaction commits **before** `prep
 
 Source units retain whole nonexcluded blocks under the current word-budget setting (default 800; an oversized block can stand alone). The service starts with saved dialogue, validates its source IDs/order, appends new segments, and plans audio from the **combined** list. The OpenAI text adapter loads the bundled prompt at construction, uses a strict response schema and preserves a candidate file before application validation. That file is not an accepted script checkpoint.
 
-Speech rendering opens an isolated Realtime session for each group. Configuration acknowledgement and successful response submission are required before accepting completion; bounded event/audio/transcript processing and structural validation can still fail. `LocalAudioArtifacts` then preserves returned bytes/text, checks waveform plausibility and produces a receipt. Provider success, an attempt marked succeeded, and insertion of an accepted checkpoint are separate steps.
+Speech rendering opens an isolated Realtime session for each planned speech chunk. Configuration acknowledgement and successful response submission are required before accepting completion; bounded event/audio/transcript processing and structural validation can still fail. `LocalAudioArtifacts` then preserves returned bytes/text, checks waveform plausibility and produces a `ValidatedAudioChunk`. Provider success, an attempt marked succeeded, and insertion of an accepted checkpoint are separate steps.
 
 Assembly requires chunk orders starting at zero without gaps, rechecks PCM hashes, inserts 200 ms pauses for the same speaker or 350 ms for a speaker change, and creates fresh scratch PCM/M4A names. Source PCM is copied without trimming. The result is mono 24 kHz AAC-LC M4A with display metadata and a SHA-256 sidecar. Only after success is the job's final path stored. Subsequent controller polling exposes playback/download URLs; `getAudio`/`downloadAudio` serve existing files without generation or re-encoding.
 
@@ -261,7 +263,7 @@ Consecutive EXPERT turns share chunk 1 because they belong to the same segment, 
 
 Suppose chunk 0 is already accepted. Rendering chunk 1 starts ProviderAttempt A (`capability=audio`, legacy `unitKey=group-1`, `attemptNumber=1`). A returns a classified transient timeout: its outcome becomes `failed`, available usage/cost and partial PCM/transcript remain, and **no ValidatedAudioChunk is inserted**. If the bounded policy permits another call, ProviderAttempt B gets a new ID with the same unit key and `attemptNumber=2`.
 
-If B completes successfully, returned PCM/transcript are preserved under `<job>/<B>/raw.pcm` and `transcript.txt`, then checked. Only after structural and waveform gates pass can `ValidatedAudioChunk.group` refer to chunk 1 with its PCM path/hash, transcript and waveform diagnostics. B's attempt is finalized and the receipt is inserted under `(generation_id, group_order=1)`. A planned chunk alone is not evidence that any audio exists; a successful attempt record alone is not an accepted checkpoint either.
+If B completes successfully, returned PCM/transcript are preserved under `<job>/<B>/raw.pcm` and `transcript.txt`, then checked. Only after structural and waveform gates pass can `ValidatedAudioChunk.group` refer to chunk 1 with its PCM path/hash, transcript and waveform diagnostics. B's attempt is finalized and the validated checkpoint is inserted into `validated_audio_chunks` under `(generation_id, chunk_order=1)`. The JSONB `group` property and attempt `unitKey=group-1` remain unchanged. A planned chunk alone is not evidence that any audio exists; a successful attempt record alone is not an accepted checkpoint either.
 
 After chunk 2 also has a receipt, assembly consumes receipts in order 0, 1, 2. This HOST → EXPERT → HOST example adds two 350 ms pauses. With six seconds of PCM per chunk the concatenated PCM is 18.7 seconds before AAC encoding. Accepted PCM is verified and copied; final M4A gets a new filename. If execution stops after accepting chunk 1, resume preserves receipts 0 and 1 and renders only chunk 2. An interrupted B without a receipt can instead require another paid call.
 

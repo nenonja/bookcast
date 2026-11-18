@@ -252,14 +252,14 @@ class GenerationPersistenceTest {
     String attemptJson = GenerationJsonCompatibilityTest.fixture("legacy-provider-attempt.json");
     var attemptId = UUID.fromString(json.readTree(attemptJson).path("id").asText());
     db.update("insert into script_segments values (?,?,?::jsonb)", job.id(), 0, segmentJson);
-    db.update("insert into audio_groups values (?,?,?::jsonb)", job.id(), 0, audioJson);
+    db.update("insert into validated_audio_chunks values (?,?,?::jsonb)", job.id(), 0, audioJson);
     db.update("insert into generation_attempts values (?,?,?::jsonb)", attemptId, job.id(), attemptJson);
     assertEquals(json.readValue(segmentJson, DialogueSegment.class), store.segments(job.id()).getFirst());
     assertEquals(json.readValue(audioJson, ValidatedAudioChunk.class), store.audio(job.id()).getFirst());
     assertEquals(json.readValue(attemptJson, ProviderAttempt.class), store.attempts(job.id()).getFirst());
-    for (String table : List.of("script_segments", "audio_groups", "generation_attempts")) {
+    for (String table : List.of("script_segments", "validated_audio_chunks", "generation_attempts")) {
       String original = table.equals("script_segments") ? segmentJson
-          : table.equals("audio_groups") ? audioJson : attemptJson;
+          : table.equals("validated_audio_chunks") ? audioJson : attemptJson;
       var saved = db.queryForObject("select payload::text from " + table + " where generation_id=?",
           String.class, job.id());
       assertEquals(json.readTree(original), json.readTree(saved));
@@ -275,7 +275,7 @@ class GenerationPersistenceTest {
     store.audio(job.id(), receipt);
     rejects(() -> store.segment(job.id(), segment));
     rejects(() -> store.audio(job.id(), receipt));
-    for (String table : List.of("script_segments", "audio_groups")) {
+    for (String table : List.of("script_segments", "validated_audio_chunks")) {
       rejects(() -> db.update("update " + table + " set payload='{}'::jsonb where generation_id=?", job.id()));
       rejects(() -> db.update("delete from " + table + " where generation_id=?", job.id()));
     }

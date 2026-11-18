@@ -15,7 +15,7 @@ Create/open Book
   → add numbered Chapter with pasted source text
   → store immutable SourceRevision and ordered SourceBlocks
   → explicitly request Finnish HOST/EXPERT dialogue generation
-  → render checkpointed audio groups
+  → render planned speech chunks into validated audio checkpoints
   → assemble Chapter M4A
   → play in browser or download for listening on another device
 ```
@@ -37,7 +37,7 @@ Create/open Book
 - Dialogue uses the v4-style Finnish guidance: source-grounded topic discussion, expert-led delivery, natural professional Finnish and preservation of substantive source material. The current execution settings use approximately 800 source words per unit and the previous segment's final four turns. These are implementation settings, not architectural invariants.
 - DialogueSegments reference source block IDs and contain structured HOST/EXPERT DialogueTurns. New dialogue is structurally validated before checkpointing. A matching leading speaker label is removed from newly generated turn text; an opposite-speaker prefix is rejected. Existing saved dialogue is not rewritten.
 - Audio rendering uses isolated contexts and bounded contiguous same-speaker speech chunks. Attempts preserve raw PCM, transcripts, safe metadata and structural diagnostics. Acceptance checks streaming-event correlation and deterministic waveform plausibility. Transcript lexical differences remain visible and do not trigger automatic rerendering.
-- Accepted dialogue segments and audio groups are checkpoints. Resume validates and reuses them, starts at the first missing unit, and can repeat assembly without regenerating accepted audio.
+- Accepted dialogue segments and validated audio chunks are checkpoints. Resume validates and reuses them, starts at the first missing unit, and can repeat assembly without regenerating accepted audio.
 - Transient provider failures have bounded automatic retries: at most three attempts per missing dialogue segment or speech chunk per run/resume, using Resilience4j's high-level retry execution and default randomized exponential backoff. A valid Retry-After is never shortened: values above 60 seconds stop automatic retries and require explicit manual recovery. Request/configuration/auth/quota errors and local validation failures do not receive automatic retries. Every attempt retains available usage; missing usage/cost remains explicitly unknown.
 - Generate requests have an idempotency key. Startup recovery marks interrupted running work failed; it does not automatically resume that paid work. The owner can explicitly retry/resume from the UI.
 - Completed chapters offer a separate **Generoi uusi podcast** action using the existing creation API, a fresh request key and the same current source revision. It starts with empty checkpoints and current provider settings. Earlier completed players/downloads remain under **Aiemmat valmiit podcastit**; their jobs, attempts, costs and media are preserved. Uncertain creation responses retain their pending key for idempotent resubmission.
@@ -54,7 +54,7 @@ Create/open Book
 
 - Java 21 / Spring Boot backend with two Spring Modulith modules: `library` owns source material and organization; `generation` owns jobs, dialogue and audio artifacts. Generation depends on the library public API, never the reverse.
 - A limited Spring Data JDBC pilot handles ordinary generation-job lookups through a read-only repository; critical commands and JSONB/checkpoints remain JdbcTemplate SQL. Domain/application persistence ports and Flyway migrations are unchanged. See [the assessment](SPRING_DATA_PERSISTENCE_PILOT.md).
-- PostgreSQL and Flyway persist library data, jobs and checkpoints. V1 introduces source storage and immutability triggers; V2 adds generation storage; V3 adds chapter numbers without regrouping, renumbering or replacing existing data.
+- PostgreSQL and Flyway persist library data, jobs and checkpoints. V1 introduces source storage and immutability triggers; V2 adds generation storage; V3 adds chapter numbers without regrouping, renumbering or replacing existing data; V4 renames accepted audio storage to `validated_audio_chunks` / `chunk_order` without rewriting rows or JSONB. See [backup and migration steps](DATA_MODEL.md#applying-v4-to-existing-local-data).
 - Private candidates, raw attempts and assembled media live on the local filesystem. The database and configured data directory must be preserved together.
 - Next.js / TypeScript consumes the checked-in OpenAPI contract through generated types; Maven generates Java API interfaces and DTOs from the same contract.
 - Existing automated checks cover domain behavior, retry limits, checkpoint recovery, provider protocol fixtures, PostgreSQL persistence, populated-database migration, API behavior, Book organization and player/download controls. Spring Modulith and ArchUnit check module boundaries and dependency direction.

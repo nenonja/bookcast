@@ -93,6 +93,7 @@ class LegacyLibraryMigrationTest {
       preserved.put(table, db.queryForList("select * from " + table + " order by 1"));
     Flyway.configure()
         .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
+        .target(MigrationVersion.fromVersion("3"))
         .load()
         .migrate();
     assertEquals(

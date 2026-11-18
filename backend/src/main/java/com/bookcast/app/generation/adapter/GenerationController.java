@@ -32,7 +32,7 @@ public class GenerationController implements GenerationApi {
   }
 
   /**
-   * Combines the supplied job with separate reads of accepted segments, audio receipts and attempts.
+   * Combines the supplied job with separate reads of accepted segments, validated audio chunks and attempts.
    * Counts describe accepted checkpoints, not the number of calls. Cost completeness depends only
    * on recorded attempts and is true for an empty attempt list. These reads are not an atomic
    * progress snapshot, and the returned audio URLs do not themselves verify file availability.
@@ -60,8 +60,8 @@ public class GenerationController implements GenerationApi {
         .stage(j.stage())
         .completedSegments(segments.size())
         .totalSegments(j.totalSegments())
-        .completedAudioGroups(audio.size())
-        .totalAudioGroups(j.totalAudio())
+        .completedSpeechChunks(audio.size())
+        .totalSpeechChunks(j.totalAudio())
         .generationModel(j.generationModel())
         .audioModel(j.audioModel())
         .estimatedGenerationCost(textEstimatedCost)

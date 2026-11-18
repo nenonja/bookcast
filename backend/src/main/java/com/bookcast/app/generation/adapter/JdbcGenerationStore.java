@@ -12,7 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Stores generation state, accepted checkpoints and attempt snapshots in PostgreSQL.
  *
- * <p>GenerationJob columns describe current progress; segments, audio receipts and attempts use JSON
+ * <p>GenerationJob columns describe current progress; segments, validated audio chunks and attempts use JSON
  * payloads.
  * Accepted checkpoints are insert-only here and protected against updates/deletion by migration
  * triggers. An attempt instead replaces its payload as it moves from pending to a final outcome;
@@ -204,14 +204,14 @@ public class JdbcGenerationStore implements GenerationStore {
 
   public List<ValidatedAudioChunk> audio(UUID id) {
     return db.query(
-        "select payload::text from audio_groups where generation_id=? order by group_order",
+        "select payload::text from validated_audio_chunks where generation_id=? order by chunk_order",
         (r, n) -> decode(r.getString(1), ValidatedAudioChunk.class),
         id);
   }
 
   public void audio(UUID id, ValidatedAudioChunk receipt) {
     db.update(
-        "insert into audio_groups values (?,?,?::jsonb)",
+        "insert into validated_audio_chunks values (?,?,?::jsonb)",
         id,
         receipt.group().order(),
         encode(receipt));
